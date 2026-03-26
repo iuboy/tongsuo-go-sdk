@@ -38,13 +38,13 @@ func expectError(t *testing.T, err error, msg string) {
 func TestBadInputs(t *testing.T) {
 	t.Parallel()
 
-	_, err := crypto.NewGCMEncryptionCipherCtx(256, nil,
+	_, err := crypto.NewGCMEncryptionCipherCtx(256,
 		[]byte("abcdefghijklmnopqrstuvwxyz"), nil)
 	expectError(t, err, "bad key size")
-	_, err = crypto.NewGCMEncryptionCipherCtx(128, nil,
+	_, err = crypto.NewGCMEncryptionCipherCtx(128,
 		[]byte("abcdefghijklmnopqrstuvwxyz"), nil)
 	expectError(t, err, "bad key size")
-	_, err = crypto.NewGCMEncryptionCipherCtx(200, nil,
+	_, err = crypto.NewGCMEncryptionCipherCtx(200,
 		[]byte("abcdefghijklmnopqrstuvwxy"), nil)
 	expectError(t, err, "unknown block size")
 
@@ -53,13 +53,13 @@ func TestBadInputs(t *testing.T) {
 		t.Fatal("Could not look up AES-128-CBC")
 	}
 
-	_, err = crypto.NewEncryptionCipherCtx(c, nil, []byte("abcdefghijklmnop"),
+	_, err = crypto.NewEncryptionCipherCtx(c, []byte("abcdefghijklmnop"),
 		[]byte("abc"))
 	expectError(t, err, "bad IV size")
 }
 
 func doEncryption(key, iv, aad, plaintext []byte, blocksize, bufsize int) ([]byte, []byte, error) {
-	ectx, err := crypto.NewGCMEncryptionCipherCtx(blocksize, nil, key, iv)
+	ectx, err := crypto.NewGCMEncryptionCipherCtx(blocksize, key, iv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Failed making GCM encryption ctx: %w", err)
 	}
@@ -97,7 +97,7 @@ func doEncryption(key, iv, aad, plaintext []byte, blocksize, bufsize int) ([]byt
 }
 
 func doDecryption(key, iv, aad, ciphertext, tag []byte, blocksize, bufsize int) ([]byte, error) {
-	dctx, err := crypto.NewGCMDecryptionCipherCtx(blocksize, nil, key, iv)
+	dctx, err := crypto.NewGCMDecryptionCipherCtx(blocksize, key, iv)
 	if err != nil {
 		return nil, fmt.Errorf("Failed making GCM decryption ctx: %w", err)
 	}
@@ -310,7 +310,7 @@ func TestNonAuthenticatedEncryption(t *testing.T) {
 		t.Fatal("Could not get cipher: ", err)
 	}
 
-	eCtx, err := crypto.NewEncryptionCipherCtx(cipher, nil, key, iv)
+	eCtx, err := crypto.NewEncryptionCipherCtx(cipher, key, iv)
 	if err != nil {
 		t.Fatal("Could not create encryption context: ", err)
 	}
@@ -336,7 +336,7 @@ func TestNonAuthenticatedEncryption(t *testing.T) {
 
 	ciphertext += string(cipherbytes)
 
-	dCtx, err := crypto.NewDecryptionCipherCtx(cipher, nil, key, iv)
+	dCtx, err := crypto.NewDecryptionCipherCtx(cipher, key, iv)
 	if err != nil {
 		t.Fatal("Could not create decryption context: ", err)
 	}

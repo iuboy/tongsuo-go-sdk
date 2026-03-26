@@ -14,7 +14,7 @@
 
 package tongsuogo
 
-// #include "shim.h"
+// #include "crypto/shim.h"
 import "C"
 
 import (
@@ -29,17 +29,15 @@ const (
 )
 
 // TicketCipherCtx describes the cipher that will be used by the ticket store
-// for encrypting the tickets. Engine may be nil if no engine is desired.
+// for encrypting the tickets.
 type TicketCipherCtx struct {
 	Cipher *crypto.Cipher
-	Engine *crypto.Engine
 }
 
 // TicketDigestCtx describes the digest that will be used by the ticket store
-// to authenticate the data. Engine may be nil if no engine is desired.
+// to authenticate the data.
 type TicketDigestCtx struct {
 	Digest *crypto.Digest
-	Engine *crypto.Engine
 }
 
 // TicketName is an identifier for the key material for a ticket.
@@ -84,20 +82,6 @@ type TicketStore struct {
 	CipherCtx TicketCipherCtx
 	DigestCtx TicketDigestCtx
 	Keys      TicketKeyManager
-}
-
-func (t *TicketStore) cipherEngine() *C.ENGINE {
-	if t.CipherCtx.Engine == nil {
-		return nil
-	}
-	return (*C.ENGINE)(t.CipherCtx.Engine.Engine())
-}
-
-func (t *TicketStore) digestEngine() *C.ENGINE {
-	if t.DigestCtx.Engine == nil {
-		return nil
-	}
-	return (*C.ENGINE)(t.DigestCtx.Engine.Engine())
 }
 
 const (
@@ -157,7 +141,7 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 		C.EVP_EncryptInit_ex(
 			cctx,
 			(*C.EVP_CIPHER)(store.CipherCtx.Cipher.Ptr()),
-			store.cipherEngine(),
+			nil,
 			(*C.uchar)(&key.CipherKey[0]),
 			(*C.uchar)(&key.IV[0]))
 		C.HMAC_Init_ex(
@@ -165,7 +149,7 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 			unsafe.Pointer(&key.HMACKey[0]),
 			C.int(len(key.HMACKey)),
 			(*C.EVP_MD)(store.DigestCtx.Digest.Ptr()),
-			store.digestEngine())
+			nil)
 
 		return ticketRespSessionOk
 
@@ -187,7 +171,7 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 		C.EVP_DecryptInit_ex(
 			cctx,
 			(*C.EVP_CIPHER)(store.CipherCtx.Cipher.Ptr()),
-			store.cipherEngine(),
+			nil,
 			(*C.uchar)(&key.CipherKey[0]),
 			(*C.uchar)(&key.IV[0]))
 		C.HMAC_Init_ex(
@@ -195,7 +179,7 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 			unsafe.Pointer(&key.HMACKey[0]),
 			C.int(len(key.HMACKey)),
 			(*C.EVP_MD)(store.DigestCtx.Digest.Ptr()),
-			store.digestEngine())
+			nil)
 
 		if store.Keys.ShouldRenew(name) {
 			return ticketRespRenewSession
@@ -216,7 +200,9 @@ func (c *Ctx) SetTicketStore(store *TicketStore) {
 	if store == nil {
 		C.X_SSL_CTX_set_tlsext_ticket_key_cb(c.ctx, nil)
 	} else {
+		// 获取回调函数指针并解引用
+		cbPtr := C.X_SSL_CTX_ticket_key_cb()
 		C.X_SSL_CTX_set_tlsext_ticket_key_cb(c.ctx,
-			(*[0]byte)(C.X_SSL_CTX_ticket_key_cb))
+			*cbPtr)
 	}
 }

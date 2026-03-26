@@ -14,7 +14,7 @@
 
 package tongsuogo
 
-// #include "shim.h"
+// #include "crypto/shim.h"
 import "C"
 
 import (
@@ -570,7 +570,8 @@ type TLSExtServernameCallback func(ssl *SSL) SSLTLSExtErr
 // http://stackoverflow.com/questions/22373332/serving-multiple-domains-in-one-box-with-sni
 func (ctx *Ctx) SetTLSExtServernameCallback(sniCb TLSExtServernameCallback) {
 	ctx.sniCb = sniCb
-	C.X_SSL_CTX_set_tlsext_servername_callback(ctx.ctx, (*[0]byte)(C.sni_cb))
+	// sni_cb 是在 sni.c 中定义的 C 函数，直接使用函数名
+	C.X_SSL_CTX_set_tlsext_servername_callback(ctx.ctx, unsafe.Pointer(C.sni_cb))
 }
 
 type TLSExtAlpnCallback func(ssl *SSL, out unsafe.Pointer, outlen unsafe.Pointer, in unsafe.Pointer, inlen uint,

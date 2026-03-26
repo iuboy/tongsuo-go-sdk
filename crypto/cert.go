@@ -303,6 +303,44 @@ func (c *Certificate) Sign(privKey PrivateKey, digest DigestAlgo) error {
 
 func (c *Certificate) insecureSign(privKey PrivateKey, digest DigestAlgo) error {
 	var md *C.EVP_MD = getDigestFunction(digest)
+
+	// Tongsuo 8.5: SM2 证书签名需要符合 GM/T 0009-2012 标准
+	// SM2 签名必须使用 SM3 摘要对用户 ID 和消息进行预处理
+	if privKey.KeyType() == KeyTypeSM2 {
+		// 创建 MD_CTX 用于签名
+		ctx := C.X_EVP_MD_CTX_new()
+		if ctx == nil {
+			return fmt.Errorf("failed to create MD_CTX: %w", PopError())
+		}
+		defer C.X_EVP_MD_CTX_free(ctx)
+
+		var pctx *C.EVP_PKEY_CTX
+
+		// 初始化签名上下文
+		if C.X_EVP_DigestSignInit(ctx, &pctx, md, nil, privKey.EvpPKey()) <= 0 {
+			return fmt.Errorf("failed to init sign: %w", PopError())
+		}
+
+		// 根据 GM/T 0009-2012，SM2 签名需要设置用户 ID
+		// 默认值：1234567812345678（16 字节十六进制字符串）
+		// 证书签名通常使用默认 ID
+		sm2DefaultID := "1234567812345678"
+		sm2ID := C.CString(sm2DefaultID)
+		defer C.free(unsafe.Pointer(sm2ID))
+
+		if C.EVP_PKEY_CTX_set1_id(pctx, unsafe.Pointer(sm2ID), C.int(len(sm2DefaultID))) <= 0 {
+			return fmt.Errorf("failed to set SM2 ID: %w", PopError())
+		}
+
+		// 使用 X509_sign_ctx 进行签名
+		if C.X509_sign_ctx(c.x, ctx) <= 0 {
+			return fmt.Errorf("failed to sign certificate: %w", PopError())
+		}
+
+		return nil
+	}
+
+	// 非 SM2 证书使用原来的方法
 	if C.X509_sign(c.x, privKey.EvpPKey(), md) <= 0 {
 		return fmt.Errorf("failed to sign certificate: %w", PopError())
 	}

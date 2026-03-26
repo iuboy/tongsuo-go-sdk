@@ -34,12 +34,15 @@ func TestECDH(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mySecret, err := crypto.DeriveSharedSecret(myKey, peerKey)
+	myPublicKey := myKey.Public()
+	peerPublicKey := peerKey.Public()
+
+	mySecret, err := crypto.DeriveSharedSecretBasic(myKey, peerPublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	theirSecret, err := crypto.DeriveSharedSecret(peerKey, myKey)
+	theirSecret, err := crypto.DeriveSharedSecretBasic(peerKey, myPublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}

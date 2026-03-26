@@ -14,7 +14,7 @@
 
 package tongsuogo
 
-// #include "shim.h"
+// #include "crypto/shim.h"
 import "C"
 
 import (
@@ -98,7 +98,9 @@ func (s *SSL) ClearOptions(options Options) Options {
 func (s *SSL) SetVerify(options VerifyOptions, verifyCb VerifyCallback) {
 	s.verifyCb = verifyCb
 	if verifyCb != nil {
-		C.SSL_set_verify(s.ssl, C.int(options), (*[0]byte)(C.X_SSL_verify_cb))
+		// 获取回调函数指针并解引用
+		cbPtr := C.X_SSL_verify_cb()
+		C.SSL_set_verify(s.ssl, C.int(options), (*[0]byte)(*cbPtr))
 	} else {
 		C.SSL_set_verify(s.ssl, C.int(options), nil)
 	}

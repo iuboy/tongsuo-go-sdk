@@ -27,29 +27,17 @@ const (
 var _ hash.Hash = new(SM3)
 
 type SM3 struct {
-	ctx    *C.EVP_MD_CTX
-	engine *crypto.Engine
+	ctx *C.EVP_MD_CTX
 }
 
-func New() (*SM3, error) { return NewWithEngine(nil) }
-
-func NewWithEngine(e *crypto.Engine) (*SM3, error) {
-	hash, err := newWithEngine(e)
-	if err != nil {
-		return nil, err
-	}
-	hash.Reset()
-
-	return hash, nil
-}
-
-func newWithEngine(e *crypto.Engine) (*SM3, error) {
-	hash := &SM3{ctx: nil, engine: e}
+func New() (*SM3, error) {
+	hash := &SM3{ctx: nil}
 	hash.ctx = C.X_EVP_MD_CTX_new()
 	if hash.ctx == nil {
 		return nil, fmt.Errorf("failed to create md ctx: %w", crypto.ErrMallocFailure)
 	}
 	runtime.SetFinalizer(hash, func(hash *SM3) { hash.Close() })
+	hash.Reset()
 
 	return hash, nil
 }
@@ -70,7 +58,7 @@ func (s *SM3) Close() {
 }
 
 func (s *SM3) Reset() {
-	C.X_EVP_DigestInit_ex(s.ctx, C.EVP_sm3(), (*C.ENGINE)(s.engine.Engine()))
+	C.X_EVP_DigestInit_ex(s.ctx, C.EVP_sm3(), nil)
 }
 
 func (s *SM3) Write(data []byte) (int, error) {
@@ -84,10 +72,12 @@ func (s *SM3) Write(data []byte) (int, error) {
 }
 
 func (s *SM3) Sum(in []byte) []byte {
-	hash, err := NewWithEngine(s.engine)
-	if err != nil {
-		panic("NewSM3 fail " + err.Error())
+	hash := &SM3{ctx: nil}
+	hash.ctx = C.X_EVP_MD_CTX_new()
+	if hash.ctx == nil {
+		panic("failed to create md ctx")
 	}
+	runtime.SetFinalizer(hash, func(hash *SM3) { hash.Close() })
 
 	if C.X_EVP_MD_CTX_copy_ex(hash.ctx, s.ctx) == 0 {
 		panic("NewSM3 X_EVP_MD_CTX_copy_ex fail")

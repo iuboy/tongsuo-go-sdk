@@ -69,14 +69,14 @@ func getGCMCipher(blocksize int) (*Cipher, error) {
 	return &Cipher{ptr: cipherptr}, nil
 }
 
-func NewGCMEncryptionCipherCtx(blocksize int, e *Engine, key, iv []byte) (
+func NewGCMEncryptionCipherCtx(blocksize int, key, iv []byte) (
 	AuthenticatedEncryptionCipherCtx, error,
 ) {
 	cipher, err := getGCMCipher(blocksize)
 	if err != nil {
 		return nil, err
 	}
-	ctx, err := newEncryptionCipherCtx(cipher, e, key, nil)
+	ctx, err := newEncryptionCipherCtx(cipher, key, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -93,14 +93,14 @@ func NewGCMEncryptionCipherCtx(blocksize int, e *Engine, key, iv []byte) (
 	return &authEncryptionCipherCtx{encryptionCipherCtx: ctx}, nil
 }
 
-func NewGCMDecryptionCipherCtx(blocksize int, e *Engine, key, iv []byte) (
+func NewGCMDecryptionCipherCtx(blocksize int, key, iv []byte) (
 	AuthenticatedDecryptionCipherCtx, error,
 ) {
 	cipher, err := getGCMCipher(blocksize)
 	if err != nil {
 		return nil, err
 	}
-	ctx, err := newDecryptionCipherCtx(cipher, e, key, nil)
+	ctx, err := newDecryptionCipherCtx(cipher, key, nil)
 	if err != nil {
 		return nil, err
 	}

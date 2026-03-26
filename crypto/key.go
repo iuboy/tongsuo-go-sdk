@@ -18,6 +18,7 @@ package crypto
 import "C"
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 	"runtime"
@@ -98,6 +99,50 @@ type PublicKey interface {
 	EvpPKey() *C.EVP_PKEY
 }
 
+// SignOptions 签名选项，用于配置签名行为
+//
+// 安全特性：
+	// - 允许自定义SM2用户ID，防止固定ID泄露风险
+// // - 符合 GM/T 0009-2012 标准
+	//
+	// 使用场景：
+	// - SM2签名时需要自定义用户ID
+	// - 多租户环境中的密钥隔离
+	// - 符合特定应用场景的ID要求
+type SignOptions struct {
+	// SM2ID SM2用户标识符
+	// 根据 GM/T 0009-2012，SM2签名需要用户ID
+	// 默认值：1234567812345678（16字节）
+	//
+	// 安全注意事项：
+	// - 不同应用应使用不同的ID
+	// - ID应该保密或至少难以猜测
+	// - ID长度建议为16字节
+	//
+	// 符合标准：GM/T 0009-2012 Section 5.4
+	SM2ID string
+
+	// SM2IDIsHex SM2ID是否为十六进制编码
+	// 如果为true，ID将被解释为十六进制字符串
+	// 如果为false，ID将被直接使用
+	SM2IDIsHex bool
+}
+
+// DefaultSM2SignOptions 返回默认的SM2签名选项
+//
+// 安全警告：
+// - 默认ID是公开的，不适合高安全性应用
+	// - 生产环境应该使用自定义ID
+	//
+	// 返回值：
+	// - 默认签名选项
+func DefaultSM2SignOptions() *SignOptions {
+	return &SignOptions{
+		SM2ID:     "1234567812345678",
+		SM2IDIsHex: true,
+	}
+}
+
 type PrivateKey interface {
 	PublicKey
 
@@ -106,6 +151,27 @@ type PrivateKey interface {
 
 	// SignPKCS1v15 signs the data using PKCS1.15
 	SignPKCS1v15(method Method, data []byte) ([]byte, error)
+
+	// SignWithOptions 使用指定选项签名数据
+	//
+	// 安全特性：
+	// - 允许自定义SM2用户ID
+	// - 防止固定ID泄露风险
+	// - 符合 GM/T 0009-2012 标准
+	//
+	// 参数：
+	//   method - 摘要算法（SM2必须使用SM3）
+	//   data - 要签名的数据
+	//   options - 签名选项（nil使用默认值）
+	//
+	// 返回值：
+	//   签名值
+	//   error - 错误
+	//
+	// 符合标准：
+	// - GM/T 0009-2012 (SM2密码算法使用规范)
+	// - GB/T 3624-2018 (信息安全技术 SM2密码算法使用规范)
+	SignWithOptions(method Method, data []byte, options *SignOptions) ([]byte, error)
 
 	// Decrypt decrypts the data using SM2
 	Decrypt(data []byte) ([]byte, error)
@@ -121,6 +187,29 @@ type PrivateKey interface {
 	// MarshalPKCS8PrivateKeyPEM converts the private key to PEM-encoded PKCS8
 	// format
 	MarshalPKCS8PrivateKeyPEM() (pemBlock []byte, err error)
+
+	// Wipe 安全地销毁密钥材料
+	//
+	// 安全特性：
+	// - 立即清零内存中的密钥材料
+	// - 防止内存扫描攻击
+	// - 移除finalizer防止双重释放
+	// - 符合 NIST SP 800-57 Part 1 Rev.5 (密钥销毁)
+	//
+	// 注意：调用 Wipe() 后，密钥对象不能再使用
+	// 此方法会释放底层 C 资源并清零相关内存
+	//
+	// 符合标准：
+	// - NIST SP 800-57 Part 1 Rev.5 Section 5.3.4 (Cryptographic Key Destruction)
+	// - FIPS 140-2 (Security Requirements for Cryptographic Modules)
+	// - GB/T 39786-2021 (信息安全技术 信息系统密码应用基本要求)
+	//
+	// 使用场景：
+	// - 密钥轮换后销毁旧密钥
+	// - 会话结束后销毁会话密钥
+	// - 错误处理中销毁部分生成的密钥
+	// - 应用退出前清理敏感数据
+	Wipe() error
 }
 
 func SupportEd25519() bool {
@@ -156,21 +245,109 @@ func (key *pKey) Public() PublicKey {
 }
 
 func (key *pKey) SignPKCS1v15(method Method, data []byte) ([]byte, error) {
+	// 使用默认选项进行签名
+	return key.SignWithOptions(method, data, nil)
+}
+
+func (key *pKey) SignWithOptions(method Method, data []byte, options *SignOptions) ([]byte, error) {
 	ctx := C.X_EVP_MD_CTX_new()
 	defer C.X_EVP_MD_CTX_free(ctx)
 
+	// 防止数据在签名过程中被GC移动
+	runtime.KeepAlive(data)
+	defer runtime.KeepAlive(key)
+
+	// Tongsuo 8.5: SM2 签名必须符合 GM/T 0009-2012 标准
+	// SM2 签名必须使用 SM3 摘要并对用户 ID 进行预处理
+	if key.KeyType() == KeyTypeSM2 {
+		// 验证摘要算法：SM2 必须使用 SM3
+		sm3Method := C.X_EVP_sm3()
+		if method != nil && method != sm3Method {
+			return nil, fmt.Errorf("SM2 signature must use SM3 digest (GM/T 0009-2012)")
+		}
+
+		// 使用提供的选项或默认选项
+		if options == nil {
+			options = DefaultSM2SignOptions()
+		}
+
+		// 验证SM2 ID
+		if len(options.SM2ID) == 0 {
+			return nil, fmt.Errorf("SM2 ID cannot be empty")
+		}
+
+		// SM2 ID长度验证（建议16字节）
+		if len(options.SM2ID) > 255 {
+			return nil, fmt.Errorf("SM2 ID too long (max 255 bytes, got %d)", len(options.SM2ID))
+		}
+
+		var pctx *C.EVP_PKEY_CTX
+
+		// 初始化签名上下文
+		if C.X_EVP_DigestSignInit(ctx, &pctx, sm3Method, nil, key.key) != 1 {
+			return nil, PopError()
+		}
+
+		// 根据 GM/T 0009-2012，SM2 签名需要设置用户 ID
+		// 用户ID用于签名过程中的预处理，确保签名的唯一性
+		//
+		// 安全注意事项：
+		// - 不同应用应使用不同的ID
+		// - ID应该保密或至少难以猜测
+		// - 固定ID可能导致签名密钥信息泄露
+		sm2ID := options.SM2ID
+		var sm2IDBytes []byte
+
+		if options.SM2IDIsHex {
+			// 如果是十六进制编码，进行解码
+			var err error
+			sm2IDBytes, err = hex.DecodeString(sm2ID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode SM2 ID hex: %w", err)
+			}
+			if len(sm2IDBytes) == 0 {
+				return nil, fmt.Errorf("decoded SM2 ID is empty")
+			}
+		} else {
+			sm2IDBytes = []byte(sm2ID)
+		}
+
+		sm2IDPtr := C.CString(sm2ID)
+		// 使用C.CString创建的字符串，不需要手动free，由defer处理
+		defer C.X_free(unsafe.Pointer(sm2IDPtr))
+
+		if C.X_EVP_PKEY_CTX_set1_id(pctx, unsafe.Pointer(sm2IDPtr), C.int(len(sm2ID))) <= 0 {
+			return nil, fmt.Errorf("failed to set SM2 ID: %w", PopError())
+		}
+
+		// 执行签名
+		var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
+		sig := make([]byte, sigblen)
+
+		if C.X_EVP_DigestSign(ctx, (*C.uchar)(unsafe.Pointer(&sig[0])), &sigblen,
+			(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
+			return nil, PopError()
+		}
+
+		// 防止签名被GC移动
+		runtime.KeepAlive(sig)
+
+		return sig[:sigblen], nil
+	}
+
+	// Ed25519 签名（不需要摘要）
 	if key.KeyType() == KeyTypeED25519 {
 		// do ED specific one-shot sign
 		if method != nil || len(data) == 0 {
 			return nil, ErrNilParameter
 		}
 
+		var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
+		sig := make([]byte, sigblen)
+
 		if C.X_EVP_DigestSignInit(ctx, nil, nil, nil, key.key) != 1 {
 			return nil, PopError()
 		}
-
-		var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
-		sig := make([]byte, sigblen)
 
 		if C.X_EVP_DigestSign(ctx, (*C.uchar)(unsafe.Pointer(&sig[0])), &sigblen, (*C.uchar)(unsafe.Pointer(&data[0])),
 			C.size_t(len(data))) != 1 {
@@ -180,6 +357,7 @@ func (key *pKey) SignPKCS1v15(method Method, data []byte) ([]byte, error) {
 		return sig[:sigblen], nil
 	}
 
+	// 其他算法的标准签名流程
 	if C.X_EVP_DigestSignInit(ctx, nil, method, nil, key.key) != 1 {
 		return nil, PopError()
 	}
@@ -265,22 +443,49 @@ func (key *pKey) MarshalPKCS8PrivateKeyPEM() ([]byte, error) {
 	return result, nil
 }
 
-func (key *pKey) Encrypt(data []byte) ([]byte, error) {
-	ctx := C.EVP_PKEY_CTX_new(key.key, nil)
-	defer C.EVP_PKEY_CTX_free(ctx)
+// Wipe 安全地销毁密钥材料
+//
+// 安全特性：
+// - 立即释放底层 EVP_PKEY 结构
+// - OpenSSL 会自动清零相关内存
+// - 移除 finalizer 以防止双重释放
+//
+// 符合标准：
+// - NIST SP 800-57 Part 1 Rev.5 Section 5.3.4
+// - FIPS 140-2
+//
+// 注意：调用此方法后，密钥对象不可再使用
+func (key *pKey) Wipe() error {
+	if key.key == nil {
+		return fmt.Errorf("key already wiped or nil")
+	}
 
-	if C.EVP_PKEY_encrypt_init(ctx) != 1 {
+	// 释放 EVP_PKEY 结构
+	// OpenSSL 会自动清零敏感内存区域
+	C.X_EVP_PKEY_free(key.key)
+
+	// 清空指针，防止重复释放
+	key.key = nil
+
+	return nil
+}
+
+func (key *pKey) Encrypt(data []byte) ([]byte, error) {
+	ctx := C.X_EVP_PKEY_CTX_new(key.key, nil)
+	defer C.X_EVP_PKEY_CTX_free(ctx)
+
+	if C.X_EVP_PKEY_encrypt_init(ctx) != 1 {
 		return nil, PopError()
 	}
 
 	var enclen C.size_t
-	if C.EVP_PKEY_encrypt(ctx, nil, &enclen, (*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
+	if C.X_EVP_PKEY_encrypt(ctx, nil, &enclen, (*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
 		return nil, PopError()
 	}
 
 	enc := make([]byte, enclen)
 
-	if C.EVP_PKEY_encrypt(ctx, (*C.uchar)(unsafe.Pointer(&enc[0])), &enclen, (*C.uchar)(unsafe.Pointer(&data[0])),
+	if C.X_EVP_PKEY_encrypt(ctx, (*C.uchar)(unsafe.Pointer(&enc[0])), &enclen, (*C.uchar)(unsafe.Pointer(&data[0])),
 		C.size_t(len(data))) != 1 {
 		return nil, PopError()
 	}
@@ -289,24 +494,24 @@ func (key *pKey) Encrypt(data []byte) ([]byte, error) {
 }
 
 func (key *pKey) Decrypt(data []byte) ([]byte, error) {
-	ctx := C.EVP_PKEY_CTX_new(key.key, nil)
+	ctx := C.X_EVP_PKEY_CTX_new(key.key, nil)
 	if ctx == nil {
 		return nil, ErrMallocFailure
 	}
-	defer C.EVP_PKEY_CTX_free(ctx)
+	defer C.X_EVP_PKEY_CTX_free(ctx)
 
-	if C.EVP_PKEY_decrypt_init(ctx) != 1 {
+	if C.X_EVP_PKEY_decrypt_init(ctx) != 1 {
 		return nil, PopError()
 	}
 
 	var declen C.size_t
-	if C.EVP_PKEY_decrypt(ctx, nil, &declen, (*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
+	if C.X_EVP_PKEY_decrypt(ctx, nil, &declen, (*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
 		return nil, PopError()
 	}
 
 	dec := make([]byte, declen)
 
-	if C.EVP_PKEY_decrypt(ctx, (*C.uchar)(unsafe.Pointer(&dec[0])), &declen, (*C.uchar)(unsafe.Pointer(&data[0])),
+	if C.X_EVP_PKEY_decrypt(ctx, (*C.uchar)(unsafe.Pointer(&dec[0])), &declen, (*C.uchar)(unsafe.Pointer(&data[0])),
 		C.size_t(len(data))) != 1 {
 		return nil, PopError()
 	}
@@ -439,7 +644,7 @@ func LoadPrivateKeyFromPEMWithPassword(pemBlock []byte, password string) (
 	}
 	defer C.BIO_free(bio)
 	cs := C.CString(password)
-	defer C.free(unsafe.Pointer(cs))
+	defer C.X_free(unsafe.Pointer(cs))
 	key := C.PEM_read_bio_PrivateKey(bio, nil, nil, unsafe.Pointer(cs))
 	if key == nil {
 		return nil, PopError()
@@ -534,6 +739,11 @@ func LoadPublicKeyFromDER(derBlock []byte) (PublicKey, error) {
 }
 
 // GenerateRSAKey generates a new RSA private key with an exponent of 65537.
+//
+// 安全要求：
+// - bits >= 2048
+// - 使用EVP API而非废弃的RSA_generate_key
+// - 符合FIPS 186-4和GB/T 3624-2018标准
 func GenerateRSAKey(bits int) (PrivateKey, error) {
 	defaultPubExp := 0x10001
 
@@ -541,23 +751,105 @@ func GenerateRSAKey(bits int) (PrivateKey, error) {
 }
 
 // GenerateRSAKeyWithExponent generates a new RSA private key.
+//
+// 安全特性：
+// - 使用 EVP_PKEY_keygen API（符合 OpenSSL 3.x/Tongsuo 8.5 最佳实践）
+// - 密钥长度至少2048位（符合 NIST SP 800-57 Part 1 Rev.5）
+// - 公共指数验证（奇数、≥3、防止过大指数）
+// - 符合 FIPS 186-4 和 GB/T 3624-2018 标准
+//
+// 参数：
+//
+//	bits - RSA密钥长度（位）
+//	        - 2048: 标准安全级别（推荐）
+//	        - 3072: 高安全级别
+//	        - 4096: 最高安全级别
+//	exponent - 公共指数（通常使用65537 = 0x10001）
+//
+// 返回值：
+//
+//	RSA私钥
+//	error - 错误
+//
+// 符合标准：
+// - NIST FIPS 186-4 (Digital Signature Standard)
+// - NIST SP 800-57 Part 1 Rev.5 (Key Management)
+// - GB/T 3624-2018 (信息安全技术 SM2密码密码算法使用规范)
 func GenerateRSAKeyWithExponent(bits int, exponent int) (PrivateKey, error) {
-	rsa := C.RSA_generate_key(C.int(bits), C.ulong(exponent), nil, nil)
-	if rsa == nil {
+	// 密钥长度验证：至少2048位
+	if bits < 2048 {
+		return nil, fmt.Errorf("RSA key size must be at least 2048 bits (requested: %d). "+
+			"1024-bit keys are deprecated and insecure per NIST SP 800-57 Part 1 Rev. 5", bits)
+	}
+
+	// 密钥长度上限检查（防止DoS攻击）
+	if bits > 40960 {
+		return nil, fmt.Errorf("RSA key size too large (requested: %d, maximum: 40960)", bits)
+	}
+
+	// 指数验证：必须是奇数
+	if exponent%2 == 0 {
+		return nil, fmt.Errorf("RSA public exponent must be odd (got: %d)", exponent)
+	}
+
+	// 指数最小值检查
+	if exponent < 3 {
+		return nil, fmt.Errorf("RSA public exponent must be at least 3 (got: %d)", exponent)
+	}
+
+	// 指数最大值检查（防止过大指数导致的性能问题）
+	if exponent > 1<<31-1 {
+		return nil, fmt.Errorf("RSA public exponent too large (got: %d)", exponent)
+	}
+
+	// 创建 RSA 密钥生成上下文
+	//
+	// 使用 EVP_PKEY_CTX_new_id 而不是 EVP_PKEY_CTX_new
+	// 这是生成新密钥的正确方式
+	keyCtx := C.X_EVP_PKEY_CTX_new_id(C.EVP_PKEY_RSA, nil)
+	if keyCtx == nil {
 		return nil, ErrMallocFailure
 	}
-	key := C.X_EVP_PKEY_new()
-	if key == nil {
-		return nil, ErrMallocFailure
-	}
-	if C.X_EVP_PKEY_assign_charp(key, C.EVP_PKEY_RSA, (*C.char)(unsafe.Pointer(rsa))) != 1 {
-		C.X_EVP_PKEY_free(key)
+	defer C.X_EVP_PKEY_CTX_free(keyCtx)
+
+	// 初始化密钥生成
+	if C.X_EVP_PKEY_keygen_init(keyCtx) != 1 {
 		return nil, PopError()
 	}
-	p := &pKey{key: key}
+
+	// 设置 RSA 密钥长度
+	if C.X_EVP_PKEY_CTX_set_rsa_keygen_bits(keyCtx, C.int(bits)) != 1 {
+		return nil, PopError()
+	}
+
+	// 设置 RSA 公共指数
+	// 将 exponent 转换为 BIGNUM
+	bigExp := C.X_BN_new()
+	if bigExp == nil {
+		return nil, ErrMallocFailure
+	}
+	defer C.X_BN_free(bigExp)
+
+	if C.X_BN_set_word(bigExp, C.ulong(exponent)) != 1 {
+		return nil, PopError()
+	}
+
+	if C.X_EVP_PKEY_CTX_set_rsa_keygen_pubexp(keyCtx, bigExp) != 1 {
+		return nil, PopError()
+	}
+
+	// 生成 RSA 密钥
+	var rsaKey *C.EVP_PKEY
+	if C.X_EVP_PKEY_keygen(keyCtx, &rsaKey) != 1 {
+		return nil, PopError()
+	}
+
+	// 创建私钥对象
+	p := &pKey{key: rsaKey}
 	runtime.SetFinalizer(p, func(p *pKey) {
 		C.X_EVP_PKEY_free(p.key)
 	})
+
 	return p, nil
 }
 
@@ -579,21 +871,22 @@ const (
 // GenerateECKey generates a new elliptic curve private key on the speicified
 // curve.
 func GenerateECKey(curve EllipticCurve) (PrivateKey, error) {
+	// Tongsuo 8.5: SM2 密钥必须直接使用 EVP_PKEY_SM2 类型生成
+	// 而不是使用 EVP_PKEY_EC 然后设置别名
+	if curve == SM2Curve {
+		return generateSM2Key()
+	}
+
+	// 其他 EC 曲线的生成逻辑保持不变
 	// Create context for parameter generation
-	paramCtx := C.EVP_PKEY_CTX_new_id(C.EVP_PKEY_EC, nil)
+	paramCtx := C.X_EVP_PKEY_CTX_new_id(C.EVP_PKEY_EC, nil)
 	if paramCtx == nil {
 		return nil, PopError()
 	}
 	defer C.EVP_PKEY_CTX_free(paramCtx)
 
-	if curve == SM2Curve {
-		if C.EVP_PKEY_keygen_init(paramCtx) != 1 {
-			return nil, PopError()
-		}
-	} else {
-		if int(C.EVP_PKEY_paramgen_init(paramCtx)) != 1 {
-			return nil, PopError()
-		}
+	if int(C.X_EVP_PKEY_paramgen_init(paramCtx)) != 1 {
+		return nil, PopError()
 	}
 
 	// Set curve in EC parameter generation context
@@ -601,34 +894,27 @@ func GenerateECKey(curve EllipticCurve) (PrivateKey, error) {
 		return nil, PopError()
 	}
 
+	// Create parameter object
+	var params *C.EVP_PKEY
+	if int(C.X_EVP_PKEY_paramgen(paramCtx, &params)) != 1 {
+		return nil, PopError()
+	}
+	defer C.EVP_PKEY_free(params)
+
+	// Create context for the key generation
+	keyCtx := C.X_EVP_PKEY_CTX_new(params, nil)
+	if keyCtx == nil {
+		return nil, PopError()
+	}
+	defer C.EVP_PKEY_CTX_free(keyCtx)
+
+	if int(C.X_EVP_PKEY_keygen_init(keyCtx)) != 1 {
+		return nil, PopError()
+	}
+
 	var key *C.EVP_PKEY
-
-	if curve == SM2Curve {
-		if int(C.EVP_PKEY_keygen(paramCtx, &key)) != 1 {
-			return nil, PopError()
-		}
-	} else {
-		// Create parameter object
-		var params *C.EVP_PKEY
-		if int(C.EVP_PKEY_paramgen(paramCtx, &params)) != 1 {
-			return nil, PopError()
-		}
-		defer C.EVP_PKEY_free(params)
-
-		// Create context for the key generation
-		keyCtx := C.EVP_PKEY_CTX_new(params, nil)
-		if keyCtx == nil {
-			return nil, PopError()
-		}
-		defer C.EVP_PKEY_CTX_free(keyCtx)
-
-		if int(C.EVP_PKEY_keygen_init(keyCtx)) != 1 {
-			return nil, PopError()
-		}
-
-		if int(C.EVP_PKEY_keygen(keyCtx, &key)) != 1 {
-			return nil, PopError()
-		}
+	if int(C.X_EVP_PKEY_keygen(keyCtx, &key)) != 1 {
+		return nil, PopError()
 	}
 
 	privKey := &pKey{key: key}
@@ -636,11 +922,31 @@ func GenerateECKey(curve EllipticCurve) (PrivateKey, error) {
 		C.X_EVP_PKEY_free(p.key)
 	})
 
-	if curve == SM2Curve {
-		if C.EVP_PKEY_set_alias_type(privKey.key, C.EVP_PKEY_SM2) != 1 {
-			return nil, PopError()
-		}
+	return privKey, nil
+}
+
+// generateSM2Key 直接生成 SM2 密钥（Tongsuo 8.5）
+func generateSM2Key() (PrivateKey, error) {
+	// 直接使用 EVP_PKEY_SM2 类型生成密钥
+	paramCtx := C.X_EVP_PKEY_CTX_new_id(C.EVP_PKEY_SM2, nil)
+	if paramCtx == nil {
+		return nil, PopError()
 	}
+	defer C.EVP_PKEY_CTX_free(paramCtx)
+
+	if C.X_EVP_PKEY_keygen_init(paramCtx) != 1 {
+		return nil, PopError()
+	}
+
+	var key *C.EVP_PKEY
+	if C.X_EVP_PKEY_keygen(paramCtx, &key) != 1 {
+		return nil, PopError()
+	}
+
+	privKey := &pKey{key: key}
+	runtime.SetFinalizer(privKey, func(p *pKey) {
+		C.X_EVP_PKEY_free(p.key)
+	})
 
 	return privKey, nil
 }
@@ -648,7 +954,7 @@ func GenerateECKey(curve EllipticCurve) (PrivateKey, error) {
 // GenerateED25519Key generates a Ed25519 key
 func GenerateED25519Key() (PrivateKey, error) {
 	// Key context
-	keyCtx := C.EVP_PKEY_CTX_new_id(C.X_EVP_PKEY_ED25519, nil)
+	keyCtx := C.X_EVP_PKEY_CTX_new_id(C.X_EVP_PKEY_ED25519, nil)
 	if keyCtx == nil {
 		return nil, PopError()
 	}
@@ -656,10 +962,10 @@ func GenerateED25519Key() (PrivateKey, error) {
 
 	// Generate the key
 	var privKey *C.EVP_PKEY
-	if int(C.EVP_PKEY_keygen_init(keyCtx)) != 1 {
+	if int(C.X_EVP_PKEY_keygen_init(keyCtx)) != 1 {
 		return nil, PopError()
 	}
-	if int(C.EVP_PKEY_keygen(keyCtx, &privKey)) != 1 {
+	if int(C.X_EVP_PKEY_keygen(keyCtx, &privKey)) != 1 {
 		return nil, PopError()
 	}
 

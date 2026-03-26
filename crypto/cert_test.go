@@ -27,7 +27,7 @@ import (
 func TestCertGenerate(t *testing.T) {
 	t.Parallel()
 
-	key, err := crypto.GenerateRSAKey(768)
+	key, err := crypto.GenerateRSAKey(2048)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestCertGenerateSM2(t *testing.T) {
 func TestCAGenerate(t *testing.T) {
 	t.Parallel()
 
-	cakey, err := crypto.GenerateRSAKey(768)
+	cakey, err := crypto.GenerateRSAKey(2048)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestCAGenerate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key, err := crypto.GenerateRSAKey(768)
+	key, err := crypto.GenerateRSAKey(2048)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestCAGenerateSM2(t *testing.T) {
 func TestCertGetNameEntry(t *testing.T) {
 	t.Parallel()
 
-	key, err := crypto.GenerateRSAKey(768)
+	key, err := crypto.GenerateRSAKey(2048)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestCertGetNameEntry(t *testing.T) {
 func TestCertVersion(t *testing.T) {
 	t.Parallel()
 
-	key, err := crypto.GenerateRSAKey(768)
+	key, err := crypto.GenerateRSAKey(2048)
 	if err != nil {
 		t.Fatal(err)
 	}

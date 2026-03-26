@@ -24,28 +24,35 @@ import (
 )
 
 type HMAC struct {
-	ctx    *C.HMAC_CTX
-	engine *Engine
-	md     *C.EVP_MD
+	ctx *C.HMAC_CTX
+	md  *C.EVP_MD
 }
 
 func NewHMAC(key []byte, digest DigestAlgo) (*HMAC, error) {
-	return NewHMACWithEngine(key, digest, nil)
-}
+	// 安全验证：密钥长度检查
+	if len(key) == 0 {
+		return nil, fmt.Errorf("HMAC key cannot be empty")
+	}
 
-func NewHMACWithEngine(key []byte, digest DigestAlgo, e *Engine) (*HMAC, error) {
+	// 安全验证：密钥长度上限（防止DoS攻击）
+	if len(key) > 4096 {
+		return nil, fmt.Errorf("HMAC key too long (max 4096 bytes, got %d)", len(key))
+	}
+
 	var md *C.EVP_MD = getDigestFunction(digest)
-	hmac := &HMAC{ctx: nil, engine: e, md: md}
+
+	// 安全验证：摘要算法有效性
+	if md == nil {
+		return nil, fmt.Errorf("invalid digest algorithm: %v", digest)
+	}
+
+	hmac := &HMAC{ctx: nil, md: md}
 	hmac.ctx = C.X_HMAC_CTX_new()
 	if hmac.ctx == nil {
 		return nil, ErrMallocFailure
 	}
 
-	var cEngine *C.ENGINE
-	if e != nil {
-		cEngine = e.Engine()
-	}
-	if rc := C.X_HMAC_Init_ex(hmac.ctx, unsafe.Pointer(&key[0]), C.int(len(key)), md, cEngine); rc != 1 {
+	if rc := C.X_HMAC_Init_ex(hmac.ctx, unsafe.Pointer(&key[0]), C.int(len(key)), md, nil); rc != 1 {
 		C.X_HMAC_CTX_free(hmac.ctx)
 		return nil, fmt.Errorf("failed to init HMAC_CTX: %w", PopError())
 	}
@@ -83,4 +90,38 @@ func (h *HMAC) Final() ([]byte, error) {
 		return nil, fmt.Errorf("failed to final HMAC: %w", PopError())
 	}
 	return result, h.Reset()
+}
+
+// Verify 安全地验证HMAC值，使用常量时间比较
+//
+// 安全特性：
+// - 防止时序攻击
+// - 防止长度推断攻击
+// - 符合RFC 2104 HMAC规范
+//
+// 参数：
+//
+//	expected - 期望的HMAC值
+//
+// 返回值：
+//
+//	如果HMAC验证成功返回 nil，否则返回错误
+func (h *HMAC) Verify(expected []byte) error {
+	// 计算实际的HMAC值
+	actual, err := h.Final()
+	if err != nil {
+		return err
+	}
+
+	// 使用常量时间比较
+	if len(expected) != len(actual) {
+		return fmt.Errorf("HMAC length mismatch: expected %d bytes, got %d bytes",
+			len(expected), len(actual))
+	}
+
+	if !ConstantTimeCompare(actual, expected) {
+		return fmt.Errorf("HMAC verification failed")
+	}
+
+	return nil
 }

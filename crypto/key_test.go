@@ -355,7 +355,7 @@ func TestGenerate(t *testing.T) {
 		t.Error(err)
 	}
 
-	_, err = crypto.GenerateRSAKeyWithExponent(1024, 65537)
+	_, err = crypto.GenerateRSAKeyWithExponent(2048, 65537)
 	if err != nil {
 		t.Error(err)
 	}
@@ -397,7 +397,8 @@ func TestGenerateEd25519(t *testing.T) {
 		t.Error(err)
 	}
 
-	_, err = key.MarshalPKCS1PrivateKeyPEM()
+	// Ed25519 不支持 PKCS1 格式，使用 PKCS8 格式
+	_, err = key.MarshalPKCS8PrivateKeyPEM()
 	if err != nil {
 		t.Error(err)
 	}
@@ -406,7 +407,7 @@ func TestGenerateEd25519(t *testing.T) {
 func TestSign(t *testing.T) {
 	t.Parallel()
 
-	key, _ := crypto.GenerateRSAKey(1024)
+	key, _ := crypto.GenerateRSAKey(2048)
 	data := []byte("the quick brown fox jumps over the lazy dog")
 
 	_, err := key.SignPKCS1v15(crypto.SHA1Method(), data)
@@ -814,12 +815,8 @@ func TestMarshalEd25519(t *testing.T) {
 		t.Error("invalid cert pem bytes")
 	}
 
-	_, err = key.MarshalPKCS1PrivateKeyPEM()
-	if err != nil {
-		t.Error(err)
-	}
-
-	_, err = key.MarshalPKCS1PrivateKeyDER()
+	// Ed25519 不支持 PKCS1 格式，使用 PKCS8 格式
+	_, err = key.MarshalPKCS8PrivateKeyPEM()
 	if err != nil {
 		t.Error(err)
 	}

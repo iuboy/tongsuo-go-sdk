@@ -254,7 +254,7 @@ type decryptionCipherCtx struct {
 	*cipherCtx
 }
 
-func newEncryptionCipherCtx(cipher *Cipher, e *Engine, key, iv []byte) (
+func newEncryptionCipherCtx(cipher *Cipher, key, iv []byte) (
 	*encryptionCipherCtx, error,
 ) {
 	if cipher == nil {
@@ -264,11 +264,7 @@ func newEncryptionCipherCtx(cipher *Cipher, e *Engine, key, iv []byte) (
 	if err != nil {
 		return nil, err
 	}
-	var eptr *C.ENGINE
-	if e != nil {
-		eptr = e.Engine()
-	}
-	if C.EVP_EncryptInit_ex(ctx.ctx, cipher.ptr, eptr, nil, nil) != 1 {
+	if C.EVP_EncryptInit_ex(ctx.ctx, cipher.ptr, nil, nil, nil) != 1 {
 		return nil, PopError()
 	}
 	err = ctx.SetKeyAndIV(key, iv)
@@ -278,7 +274,7 @@ func newEncryptionCipherCtx(cipher *Cipher, e *Engine, key, iv []byte) (
 	return &encryptionCipherCtx{cipherCtx: ctx}, nil
 }
 
-func newDecryptionCipherCtx(cipher *Cipher, e *Engine, key, iv []byte) (
+func newDecryptionCipherCtx(cipher *Cipher, key, iv []byte) (
 	*decryptionCipherCtx, error,
 ) {
 	if cipher == nil {
@@ -288,11 +284,7 @@ func newDecryptionCipherCtx(cipher *Cipher, e *Engine, key, iv []byte) (
 	if err != nil {
 		return nil, err
 	}
-	var eptr *C.ENGINE
-	if e != nil {
-		eptr = e.Engine()
-	}
-	if C.EVP_DecryptInit_ex(ctx.ctx, cipher.ptr, eptr, nil, nil) != 1 {
+	if C.EVP_DecryptInit_ex(ctx.ctx, cipher.ptr, nil, nil, nil) != 1 {
 		return nil, PopError()
 	}
 	err = ctx.SetKeyAndIV(key, iv)
@@ -302,16 +294,16 @@ func newDecryptionCipherCtx(cipher *Cipher, e *Engine, key, iv []byte) (
 	return &decryptionCipherCtx{cipherCtx: ctx}, nil
 }
 
-func NewEncryptionCipherCtx(c *Cipher, e *Engine, key, iv []byte) (
+func NewEncryptionCipherCtx(c *Cipher, key, iv []byte) (
 	EncryptionCipherCtx, error,
 ) {
-	return newEncryptionCipherCtx(c, e, key, iv)
+	return newEncryptionCipherCtx(c, key, iv)
 }
 
-func NewDecryptionCipherCtx(c *Cipher, e *Engine, key, iv []byte) (
+func NewDecryptionCipherCtx(c *Cipher, key, iv []byte) (
 	DecryptionCipherCtx, error,
 ) {
-	return newDecryptionCipherCtx(c, e, key, iv)
+	return newDecryptionCipherCtx(c, key, iv)
 }
 
 func (ctx *encryptionCipherCtx) EncryptUpdate(input []byte) ([]byte, error) {

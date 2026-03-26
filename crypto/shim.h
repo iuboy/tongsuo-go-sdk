@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef TONGSUO_GO_SDK_CRYPTO_SHIM_H
+#define TONGSUO_GO_SDK_CRYPTO_SHIM_H
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,10 +25,27 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <openssl/ec.h>
 #include <openssl/opensslv.h>
-#include <openssl/sm4.h>
+#include <openssl/ssl.h>
+
+// SM4 兼容层（Tongsuo 8.5.0+）
+// 使用内部头文件 crypto/sm4.h 中的定义
+#define SM4_KEY_SIZE 16
+#define SM4_BLOCK_SIZE 16
+
+// SM4_KEY 结构体定义与内部 crypto/sm4.h 匹配
+typedef struct SM4_KEY_st {
+    uint32_t rk[32];  // SM4_KEY_SCHEDULE = 32
+} SM4_KEY;
+
+// SM4 函数声明（使用内部 ossl_sm4_* 函数实现）
+extern void SM4_set_key(const unsigned char *key, SM4_KEY *ks);
+extern void SM4_encrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks);
+extern void SM4_decrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks);
 
 /* shim  methods */
 extern int X_tscrypto_init();
@@ -97,9 +117,64 @@ extern int X_EVP_CIPHER_CTX_iv_length(EVP_CIPHER_CTX *ctx);
 extern void X_EVP_CIPHER_CTX_set_padding(EVP_CIPHER_CTX *ctx, int padding);
 extern const EVP_CIPHER *X_EVP_CIPHER_CTX_cipher(EVP_CIPHER_CTX *ctx);
 extern int X_EVP_CIPHER_CTX_encrypting(const EVP_CIPHER_CTX *ctx);
-extern int X_EVP_PKEY_CTX_set_ec_paramgen_curve_nid(EVP_PKEY_CTX *ctx, int nid);
+extern EVP_CIPHER_CTX *X_EVP_CIPHER_CTX_new();
+extern void X_EVP_CIPHER_CTX_free(EVP_CIPHER_CTX *ctx);
+extern const EVP_CIPHER *X_EVP_sm4_ecb();
+extern int X_EVP_EncryptInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl, const unsigned char *key, const unsigned char *iv);
+extern int X_EVP_EncryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl);
+extern int X_EVP_EncryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl);
+extern int X_EVP_DecryptInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl, const unsigned char *key, const unsigned char *iv);
+extern int X_EVP_DecryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl);
+extern int X_EVP_DecryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl);
+
+/* EVP_PKEY_CTX methods */
+extern EVP_PKEY_CTX *X_EVP_PKEY_CTX_new(EVP_PKEY *pkey, ENGINE *e);
+extern EVP_PKEY_CTX *X_EVP_PKEY_CTX_new_id(int id, ENGINE *e);
+extern void X_EVP_PKEY_CTX_free(EVP_PKEY_CTX *ctx);
 extern int X_EVP_PKEY_CTX_set1_id(EVP_PKEY_CTX *ctx, void *id, int id_len);
+extern int X_EVP_PKEY_keygen_init(EVP_PKEY_CTX *ctx);
+extern int X_EVP_PKEY_keygen(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey);
+extern int X_EVP_PKEY_paramgen_init(EVP_PKEY_CTX *ctx);
+extern int X_EVP_PKEY_paramgen(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey);
+extern int X_EVP_PKEY_derive_init(EVP_PKEY_CTX *ctx);
+extern int X_EVP_PKEY_derive_set_peer(EVP_PKEY_CTX *ctx, EVP_PKEY *peer);
+extern int X_EVP_PKEY_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *pkeylen);
+extern int X_EVP_PKEY_CTX_set_ec_paramgen_curve_nid(EVP_PKEY_CTX *ctx, int nid);
 extern int X_EVP_PKEY_is_sm2(EVP_PKEY *pkey);
+extern int X_EVP_PKEY_CTX_set_rsa_keygen_bits(EVP_PKEY_CTX *ctx, int bits);
+extern int X_EVP_PKEY_CTX_set_rsa_keygen_pubexp(EVP_PKEY_CTX *ctx, BIGNUM *pubexp);
+
+/* EVP_PKEY encryption/decryption */
+extern int X_EVP_PKEY_encrypt_init(EVP_PKEY_CTX *ctx);
+extern int X_EVP_PKEY_encrypt(EVP_PKEY_CTX *ctx, unsigned char *out, size_t *outlen,
+                              const unsigned char *in, size_t inlen);
+extern int X_EVP_PKEY_decrypt_init(EVP_PKEY_CTX *ctx);
+extern int X_EVP_PKEY_decrypt(EVP_PKEY_CTX *ctx, unsigned char *out, size_t *outlen,
+                              const unsigned char *in, size_t inlen);
+
+/* BIGNUM methods */
+extern BIGNUM *X_BN_new(void);
+extern void X_BN_free(BIGNUM *a);
+extern int X_BN_set_word(BIGNUM *a, unsigned long w);
+extern int X_BN_num_bytes(const BIGNUM *a);
+
+/* String and memory allocation helpers */
+extern char *X_CString(const char *str);
+extern void X_free(void *ptr);
+
+/* 密钥验证函数 - 符合 NIST SP 800-56A Rev.3 */
+extern int X_EVP_PKEY_public_check(const EVP_PKEY *pkey);
+extern int X_EVP_PKEY_pairwise_check(const EVP_PKEY *pkey);
+
+/* KDF 函数 - HKDF from PKCS#3 */
+extern int X_EVP_KDF_derive(const EVP_MD *md,
+                            const unsigned char *key, size_t key_len,
+                            const unsigned char *salt, size_t salt_len,
+                            const unsigned char *info, size_t info_len,
+                            unsigned char *out, size_t out_len);
+
+/* 常量时间比较 */
+extern int X_CRYPTO_memcmp(const void *a, const void *b, size_t n);
 
 /* HMAC methods */
 extern size_t X_HMAC_size(const HMAC_CTX *e);
@@ -120,3 +195,124 @@ extern int X_PEM_write_bio_PrivateKey_traditional(BIO *bio, EVP_PKEY *key, const
 
 /* ASN.1 methods */
 extern ECDSA_SIG *X_d2i_ECDSA_SIG(ECDSA_SIG **psig, const unsigned char **ppin, long len);
+
+/* BIO methods */
+extern BIO *BIO_new(const BIO_METHOD *type);
+extern int BIO_free(BIO *a);
+extern long BIO_ctrl(BIO *bp, int cmd, long larg, void *parg);
+
+/* BIO_CTRL constants - 使用 ifndef 保护避免重定义 */
+#ifndef BIO_CTRL_RESET
+#define BIO_CTRL_RESET 1
+#endif
+#ifndef BIO_CTRL_EOF
+#define BIO_CTRL_EOF 2
+#endif
+#ifndef BIO_CTRL_INFO
+#define BIO_CTRL_INFO 3
+#endif
+#ifndef BIO_CTRL_SET
+#define BIO_CTRL_SET 4
+#endif
+#ifndef BIO_CTRL_GET
+#define BIO_CTRL_GET 5
+#endif
+#ifndef BIO_CTRL_PUSH
+#define BIO_CTRL_PUSH 6
+#endif
+#ifndef BIO_CTRL_POP
+#define BIO_CTRL_POP 7
+#endif
+#ifndef BIO_CTRL_DUP
+#define BIO_CTRL_DUP 8
+#endif
+#ifndef BIO_CTRL_FLUSH
+#define BIO_CTRL_FLUSH 11
+#endif
+#ifndef BIO_CTRL_WPENDING
+#define BIO_CTRL_WPENDING 13
+#endif
+
+/* EVP_CTRL constants for GCM - 使用 ifndef 保护避免重定义 */
+#ifndef EVP_CTRL_GCM_SET_IVLEN
+#define EVP_CTRL_GCM_SET_IVLEN 0x1009
+#endif
+#ifndef EVP_CTRL_GCM_GET_TAG
+#define EVP_CTRL_GCM_GET_TAG 0x1010
+#endif
+#ifndef EVP_CTRL_GCM_SET_TAG
+#define EVP_CTRL_GCM_SET_TAG 0x1011
+#endif
+
+/* C standard types */
+typedef unsigned char uchar;
+
+/* OpenSSL cleanse */
+void OPENSSL_cleanse(void *ptr, size_t len);
+
+/* SSL/TLS ticket key callback */
+typedef int (*SSL_CTX_tlsext_ticket_key_cb_fn)(SSL *ssl,
+                                                unsigned char *key_name,
+                                                unsigned char *iv,
+                                                EVP_CIPHER_CTX *ctx,
+                                                HMAC_CTX *hctx,
+                                                int enc);
+
+extern void X_SSL_CTX_set_tlsext_ticket_key_cb(SSL_CTX *ctx, SSL_CTX_tlsext_ticket_key_cb_fn cb);
+extern SSL_CTX_tlsext_ticket_key_cb_fn* X_SSL_CTX_ticket_key_cb(void);
+
+/* SSL methods */
+extern int X_SSL_new_index(void);
+extern long X_SSL_get_options(const SSL *ssl);
+extern long X_SSL_set_options(SSL *ssl, long options);
+extern long X_SSL_clear_options(SSL *ssl, long options);
+
+/* SSL verify callback */
+typedef int (*SSL_verify_cb_fn)(int ok, X509_STORE_CTX *ctx);
+extern SSL_verify_cb_fn* X_SSL_verify_cb(void);
+
+/* SSL_CTX methods */
+extern int X_SSL_CTX_new_index(void);
+extern const SSL_METHOD* X_NTLS_method(void);
+extern long X_SSL_CTX_get_options(const SSL_CTX *ctx);
+extern long X_SSL_CTX_set_options(SSL_CTX *ctx, long options);
+extern long X_SSL_CTX_clear_options(SSL_CTX *ctx, long options);
+extern long X_SSL_CTX_get_mode(const SSL_CTX *ctx);
+extern long X_SSL_CTX_set_mode(SSL_CTX *ctx, long mode);
+extern long X_SSL_CTX_get_timeout(const SSL_CTX *ctx);
+extern long X_SSL_CTX_set_timeout(SSL_CTX *ctx, long t);
+extern long X_SSL_CTX_sess_get_cache_size(const SSL_CTX *ctx);
+extern long X_SSL_CTX_sess_set_cache_size(SSL_CTX *ctx, long t);
+extern int X_SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version);
+extern int X_SSL_CTX_set_max_proto_version(SSL_CTX *ctx, int version);
+extern int X_SSL_CTX_set_session_cache_mode(SSL_CTX *ctx, long mode);
+extern int X_SSL_CTX_enable_ntls(SSL_CTX *ctx);
+extern int X_SSL_CTX_set_tmp_dh(SSL_CTX *ctx, DH *dh);
+extern int X_SSL_CTX_set_tmp_ecdh(SSL_CTX *ctx, EC_KEY *ecdh);
+extern int X_SSL_CTX_set_tlsext_servername_callback(SSL_CTX *ctx, void *cb);
+extern int X_SSL_CTX_add_extra_chain_cert(SSL_CTX *ctx, X509 *x509);
+extern int X_X509_add_ref(X509 *x509);
+
+/* SSL_CTX verify callback */
+typedef int (*SSL_CTX_verify_cb_fn)(int ok, X509_STORE_CTX *ctx);
+extern SSL_CTX_verify_cb_fn* X_SSL_CTX_verify_cb(void);
+
+/* ALPN/SNI callback types */
+typedef int (*alpn_cb_fn)(SSL *ssl, const unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg);
+typedef int (*sni_cb_fn)(SSL *ssl, int *ad, void *arg);
+
+// 这些函数在 sni.c 中实现
+extern int sni_cb(SSL *ssl, int *ad, void *arg);
+extern int alpn_cb(SSL *ssl, const unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg);
+
+/* Additional SSL functions */
+extern const char* X_SSL_get_version(const SSL *ssl);
+extern const char* X_SSL_get_cipher_name(const SSL *ssl);
+extern int X_SSL_session_reused(const SSL *ssl);
+extern int X_SSL_set_tlsext_host_name(SSL *ssl, const char *name);
+
+/* STACK_OF(X509) accessor functions */
+extern int X_sk_X509_num(const STACK_OF(X509) *sk);
+extern X509* X_sk_X509_value(const STACK_OF(X509) *sk, int index);
+
+#endif /* TONGSUO_GO_SDK_CRYPTO_SHIM_H */

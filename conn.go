@@ -14,7 +14,7 @@
 
 package tongsuogo
 
-// #include "shim.h"
+// #include "crypto/shim.h"
 import "C"
 
 import (
@@ -32,9 +32,6 @@ import (
 )
 
 var (
-	errZeroReturn = errors.New("zero return")
-	errWantRead   = errors.New("want read")
-	errWantWrite  = errors.New("want write")
 	errTryAgain   = errors.New("try again")
 )
 
