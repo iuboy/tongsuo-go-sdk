@@ -239,14 +239,54 @@ func (c *Certificate) SetIssuerName(name *Name) error {
 }
 
 // SetSerial sets the serial of a certificate.
+//
+// 符合 RFC 5280 Section 4.1.2.2 要求：
+// - 序列号必须为正整数
+// - 序列号编码不超过 20 字节（160 位）
+//
+// 安全特性：
+// - 使用固定 20 字节编码，防止通过 DER 编码长度泄露序列号量级信息
+// - 符合 CA/Browser Forum Baseline Requirements Section 7.1：
+//   至少 64 位熵，不超过 159 位
 func (c *Certificate) SetSerial(serial *big.Int) error {
+	if serial == nil {
+		return fmt.Errorf("serial number cannot be nil")
+	}
+	if serial.Sign() <= 0 {
+		return fmt.Errorf("serial number must be a positive integer per RFC 5280 Section 4.1.2.2")
+	}
+
+	serialBytes := serial.Bytes()
+
+	// RFC 5280 Section 4.1.2.2: serial number encoding MUST NOT exceed 20 octets
+	// big.Int.Bytes() 去除前导零，但高位为 1 时 ASN.1 需要额外 0x00 前缀字节
+	asn1Len := len(serialBytes)
+	if serialBytes[0]&0x80 != 0 {
+		asn1Len++ // ASN.1 正整数需要额外前导 0x00 字节
+	}
+	if asn1Len > 20 {
+		return fmt.Errorf("serial number too long: ASN.1 encoding is %d bytes, RFC 5280 limits to 20", asn1Len)
+	}
+
+	// 固定长度编码：始终填充至 20 字节
+	// 防止通过 DER 编码长度泄露序列号量级信息（信息泄露侧信道）
+	//
+	// 攻击场景：变长编码下，1 字节序列号与 20 字节序列号在 DER 中长度不同，
+	// 攻击者可通过观察证书 DER 编码推断序列号范围。
+	// 固定长度编码消除了这一侧信道。
+	//
+	// 填充后最高字节为 0x00（除非恰好 20 字节），ASN.1 不需要额外正号前缀。
+	// 符合 CA/Browser Forum Baseline Requirements Section 7.1 推荐实践。
+	const serialFixedLen = 20
+	fixedBytes := make([]byte, serialFixedLen)
+	copy(fixedBytes[serialFixedLen-len(serialBytes):], serialBytes)
+
 	sno := C.ASN1_INTEGER_new()
 	defer C.ASN1_INTEGER_free(sno)
 	bn := C.BN_new()
 	defer C.BN_free(bn)
 
-	serialBytes := serial.Bytes()
-	if bn = C.BN_bin2bn((*C.uchar)(unsafe.Pointer(&serialBytes[0])), C.int(len(serialBytes)), bn); bn == nil {
+	if bn = C.BN_bin2bn((*C.uchar)(unsafe.Pointer(&fixedBytes[0])), C.int(serialFixedLen), bn); bn == nil {
 		return fmt.Errorf("failed to set serial: %w", PopError())
 	}
 	if sno = C.BN_to_ASN1_INTEGER(bn, sno); sno == nil {
@@ -322,13 +362,19 @@ func (c *Certificate) insecureSign(privKey PrivateKey, digest DigestAlgo) error 
 		}
 
 		// 根据 GM/T 0009-2012，SM2 签名需要设置用户 ID
-		// 默认值：1234567812345678（16 字节十六进制字符串）
-		// 证书签名通常使用默认 ID
-		sm2DefaultID := "1234567812345678"
-		sm2ID := C.CString(sm2DefaultID)
+		// 默认值：1234567812345678（16 字节 ASCII 字符串，非 hex 编码）
+		// 证书签名使用标准默认 ID
+		//
+	// 使用与密钥签名相同的 ParseSM2ID 函数，确保 ID 处理逻辑一致
+		sm2DefaultIDBytes, idErr := ParseSM2ID("1234567812345678", false)
+		if idErr != nil {
+			return fmt.Errorf("failed to parse default SM2 ID: %w", idErr)
+		}
+		sm2ID := C.CString(string(sm2DefaultIDBytes))
 		defer C.free(unsafe.Pointer(sm2ID))
+		defer runtime.KeepAlive(sm2DefaultIDBytes)
 
-		if C.EVP_PKEY_CTX_set1_id(pctx, unsafe.Pointer(sm2ID), C.int(len(sm2DefaultID))) <= 0 {
+		if C.EVP_PKEY_CTX_set1_id(pctx, unsafe.Pointer(sm2ID), C.int(len(sm2DefaultIDBytes))) <= 0 {
 			return fmt.Errorf("failed to set SM2 ID: %w", PopError())
 		}
 

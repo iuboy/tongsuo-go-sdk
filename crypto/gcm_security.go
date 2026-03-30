@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"runtime"
 	"sync"
 )
 
@@ -43,10 +44,12 @@ import (
 // - 每个加密操作必须使用唯一的IV
 // - 推荐使用随机IV或计数器IV
 type GCMSecurityContext struct {
-	mu         sync.RWMutex
-	ivHistory  map[string]bool
-	maxHistory int
-	contextID  string
+	mu          sync.RWMutex
+	ivHistory   map[string]struct{} // 使用 struct{} 值节省内存
+	ivOrder     []string          // 顺序记录，用于调试
+	maxHistory  int
+	contextID   string
+	totalCount  int64
 }
 
 // gcmSecurityManager 全局GCM安全管理器
@@ -62,7 +65,7 @@ var gcmSecurityManager = struct {
 // 参数：
 //
 //	contextID - 上下文标识符（用于多个GCM实例）
-//	maxHistory - 最大IV历史记录数（0表示无限制）
+//	maxHistory - 最大IV历史记录数（0表示无限制，默认10000）
 //
 // 返回值：
 //
@@ -70,13 +73,28 @@ var gcmSecurityManager = struct {
 //
 // 推荐配置：
 // - contextID应该唯一标识使用场景（如会话ID、连接ID等）
-// - maxHistory应该足够大以防止意外重用
-// - 对于高安全性应用，maxHistory设为0（无限制）
+// - maxHistory建议值：
+//   * 低安全性应用：1000（约1MB内存）
+//   * 标准安全性应用：10000（约10MB内存）
+//   * 高安全性应用：100000（约100MB内存）
+//   * 极高安全性应用：0（无限制，需监控内存）
+//
+// 内存使用估算：
+// - 每个IV条目约100字节（16字节IV的hex编码 + map开销）
+// - 10000个IV ≈ 1MB内存
 func NewGCMSecurityContext(contextID string, maxHistory int) *GCMSecurityContext {
+	if maxHistory < 0 {
+		maxHistory = 0
+	}
+	if maxHistory == 0 {
+		maxHistory = 10000
+	}
+
 	return &GCMSecurityContext{
-		ivHistory:  make(map[string]bool),
-		maxHistory: maxHistory,
-		contextID:  contextID,
+		ivHistory:   make(map[string]struct{}, maxHistory/10),
+		ivOrder:     make([]string, 0, maxHistory),
+		maxHistory:  maxHistory,
+		contextID:   contextID,
 	}
 }
 
@@ -105,18 +123,21 @@ func GetGCMSecurityContext(contextID string) *GCMSecurityContext {
 //
 // 安全特性：
 // - 防止IV重用
+// - 当历史满时拒绝新加密（防止IV重放攻击）
 // - 常量时间比较（防止时序攻击）
-// - 自动清理旧记录（防止内存耗尽）
 //
 // 返回值：
 //
-//	error - 如果IV已被使用则返回错误
+//	error - 如果IV已被使用或历史已满则返回错误
+//
+// C-08 修复说明：
+// 修复前使用 FIFO 清理策略淘汰旧 IV，允许被淘汰的 IV 被重用（重放攻击）。
+// 修复后当历史满时直接拒绝新的加密操作，要求调用方执行密钥轮换。
+// 这符合 NIST SP 800-38D Section 8 对 IV 唯一性的严格要求。
 func (ctx *GCMSecurityContext) checkAndRecordIV(iv []byte) error {
 	// IV长度验证
 	if len(iv) < 12 {
-		// NIST SP 800-38D 推荐最小12字节
-		// 更短的IV需要特殊处理，容易发生碰撞
-		return fmt.Errorf("IV too short (got %d bytes, minimum 12 recommended): %w", len(iv), ErrBadIvSize)
+		return fmt.Errorf("GCM IV too short: %d bytes (minimum 12 per NIST SP 800-38D)", len(iv))
 	}
 
 	// 将IV转换为十六进制字符串作为key
@@ -126,27 +147,24 @@ func (ctx *GCMSecurityContext) checkAndRecordIV(iv []byte) error {
 	defer ctx.mu.Unlock()
 
 	// 检查IV是否已被使用
-	if ctx.ivHistory[ivStr] {
-		// IV重用检测到！这是严重的安全问题
-		return fmt.Errorf("GCM IV reuse detected - critical security failure! IV: %s", ivStr)
+	if _, exists := ctx.ivHistory[ivStr]; exists {
+		// 注意：不泄露 IV 值，仅返回通用错误（C-01 修复）
+		return fmt.Errorf("GCM IV reuse detected - critical security failure! Context: %s",
+			ctx.contextID)
+	}
+
+	// C-08 修复：当历史满时拒绝新加密，而非淘汰旧 IV
+	// 防止被淘汰的 IV 被重用（重放攻击）
+	if ctx.maxHistory > 0 && len(ctx.ivHistory) >= ctx.maxHistory {
+		return fmt.Errorf("GCM IV history full (%d/%d) - key rotation required. "+
+			"Call ClearIVHistory() after rotating the encryption key. Context: %s",
+			len(ctx.ivHistory), ctx.maxHistory, ctx.contextID)
 	}
 
 	// 记录此IV
-	ctx.ivHistory[ivStr] = true
-
-	// 如果启用了历史限制，清理旧记录
-	if ctx.maxHistory > 0 && len(ctx.ivHistory) > ctx.maxHistory {
-		// 清理最旧的10%记录
-		toRemove := ctx.maxHistory / 10
-		count := 0
-		for ivStr := range ctx.ivHistory {
-			delete(ctx.ivHistory, ivStr)
-			count++
-			if count >= toRemove {
-				break
-			}
-		}
-	}
+	ctx.ivHistory[ivStr] = struct{}{}
+	ctx.ivOrder = append(ctx.ivOrder, ivStr)
+	ctx.totalCount++
 
 	return nil
 }
@@ -162,7 +180,8 @@ func (ctx *GCMSecurityContext) checkAndRecordIV(iv []byte) error {
 func (ctx *GCMSecurityContext) ClearIVHistory() {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
-	ctx.ivHistory = make(map[string]bool)
+	ctx.ivHistory = make(map[string]struct{})
+	ctx.ivOrder = ctx.ivOrder[:0]
 }
 
 // GetIVHistorySize 获取当前IV历史记录数量
@@ -291,12 +310,11 @@ func GCMDecrypt(key, ciphertext, tag, iv, aad []byte, securityCtx *GCMSecurityCo
 		return nil, fmt.Errorf("invalid GCM tag size: %d bytes (expected 16)", len(tag))
 	}
 
-	// IV重用检测（可选，用于检测密钥重用攻击）
-	if securityCtx != nil {
-		if err := securityCtx.checkAndRecordIV(iv); err != nil {
-			return nil, fmt.Errorf("IV validation failed (possible key reuse attack): %w", err)
-		}
-	}
+	// 注意：解密不记录 IV。
+	// GCM 解密的安全性由认证标签（authentication tag）保证，而非 IV 唯一性。
+	// IV 唯一性要求仅适用于加密操作（NIST SP 800-38D Section 8）。
+	// 如果使用同一 securityCtx 进行加密和解密，解密记录 IV 会导致后续
+	// 使用相同 IV 的加密操作被误判为 IV 重用（C-07 修复）。
 
 	// 确定块大小
 	blocksize := len(key) * 8
@@ -563,13 +581,20 @@ func NewSecureGCMEncryptionCipherCtx(blocksize int, key, iv []byte, securityCtx 
 		}
 	}
 
+	// 防御性复制密钥，防止调用方修改影响加密上下文
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
+
 	// 包装上下文，添加安全跟踪
-	return &secureGCMEncryptionCtx{
+	enc := &secureGCMEncryptionCtx{
 		AuthenticatedEncryptionCipherCtx: ctx,
 		securityCtx:                      securityCtx,
-		key:                              key,
+		key:                              keyCopy,
 		ivSet:                            len(iv) > 0,
-	}, nil
+	}
+	// H-03 修复：设置 finalizer 确保 GC 时清零密钥副本
+	runtime.SetFinalizer(enc, func(e *secureGCMEncryptionCtx) { e.Close() })
+	return enc, nil
 }
 
 // secureGCMEncryptionCtx 安全的GCM加密上下文包装器
@@ -581,6 +606,15 @@ type secureGCMEncryptionCtx struct {
 	initialized bool
 }
 
+// Close 安全清零密钥副本（H-03 修复）
+//
+// 符合 NIST SP 800-57 Part 1 Rev.5 Section 5.3.4：
+// 密钥材料在不再使用时应被安全擦除
+func (ctx *secureGCMEncryptionCtx) Close() {
+	ZeroBytes(ctx.key)
+	ctx.key = nil
+}
+
 // secureGCMDecryptionCtx 安全的GCM解密上下文包装器
 type secureGCMDecryptionCtx struct {
 	AuthenticatedDecryptionCipherCtx
@@ -590,6 +624,12 @@ type secureGCMDecryptionCtx struct {
 	initialized bool
 }
 
+// Close 安全清零密钥副本（H-03 修复）
+func (ctx *secureGCMDecryptionCtx) Close() {
+	ZeroBytes(ctx.key)
+	ctx.key = nil
+}
+
 // NewSecureGCMDecryptionCipherCtx 创建安全的GCM解密上下文
 func NewSecureGCMDecryptionCipherCtx(blocksize int, key, iv []byte, securityCtx *GCMSecurityContext) (AuthenticatedDecryptionCipherCtx, error) {
 	ctx, err := NewGCMDecryptionCipherCtx(blocksize, key, nil)
@@ -597,13 +637,16 @@ func NewSecureGCMDecryptionCipherCtx(blocksize int, key, iv []byte, securityCtx 
 		return nil, err
 	}
 
-	// 如果提供了IV，立即验证
+	// 注意：解密不记录 IV（C-07 修复）
+	// GCM 解密的安全性由认证标签（authentication tag）保证，而非 IV 唯一性。
+	// IV 唯一性要求仅适用于加密操作（NIST SP 800-38D Section 8）。
+	// 如果使用同一 securityCtx 进行加密和解密，解密记录 IV 会导致后续
+	// 使用相同 IV 的加密操作被误判为 IV 重用。
+
 	if len(iv) > 0 {
-		if securityCtx == nil {
-			securityCtx = GetGCMSecurityContext("default")
-		}
-		if err := securityCtx.checkAndRecordIV(iv); err != nil {
-			return nil, fmt.Errorf("IV validation failed: %w", err)
+		// 仅验证 IV 长度，不记录到历史
+		if len(iv) < 12 {
+			return nil, fmt.Errorf("GCM IV too short for decryption: %d bytes (minimum 12 per NIST SP 800-38D)", len(iv))
 		}
 
 		// 设置IV
@@ -615,12 +658,19 @@ func NewSecureGCMDecryptionCipherCtx(blocksize int, key, iv []byte, securityCtx 
 		}
 	}
 
-	return &secureGCMDecryptionCtx{
+	// 防御性复制密钥，防止调用方修改影响解密上下文
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
+
+	dec := &secureGCMDecryptionCtx{
 		AuthenticatedDecryptionCipherCtx: ctx,
 		securityCtx:                      securityCtx,
-		key:                              key,
+		key:                              keyCopy,
 		ivSet:                            len(iv) > 0,
-	}, nil
+	}
+	// H-03 修复：设置 finalizer 确保 GC 时清零密钥副本
+	runtime.SetFinalizer(dec, func(d *secureGCMDecryptionCtx) { d.Close() })
+	return dec, nil
 }
 
 // GetGCMContextStats 获取GCM上下文统计信息

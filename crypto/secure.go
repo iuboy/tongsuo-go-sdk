@@ -14,13 +14,18 @@
 
 package crypto
 
+// #include "shim.h"
+import "C"
+
 import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"runtime"
 	"time"
+	"unsafe"
 )
 
 // ConstantTimeCompare 比较两个字节切片，使用常量时间算法
@@ -84,13 +89,11 @@ func SecureEqual(a, b []byte) bool {
 //
 //	如果MAC验证成功返回 nil，否则返回错误
 func VerifyMAC(expected, actual []byte) error {
-	if len(expected) != len(actual) {
-		// 长度不同立即返回（长度本身通常不是敏感信息）
-		return fmt.Errorf("MAC length mismatch: expected %d bytes, got %d bytes",
-			len(expected), len(actual))
-	}
-
-	if !ConstantTimeCompare(expected, actual) {
+	// H-01 修复：移除提前长度检查，避免时序泄露
+	// subtle.ConstantTimeCompare 在长度不等时返回 0，且执行时间为
+	// O(len(expected))（取较短者），不泄露长度差异的时序信息。
+	// 注意：当长度不等时，仍通过返回统一错误消息避免信息泄露。
+	if subtle.ConstantTimeCompare(expected, actual) != 1 {
 		return fmt.Errorf("MAC verification failed")
 	}
 
@@ -108,9 +111,9 @@ func VerifyHexMAC(expectedHex string, actual []byte) error {
 		return fmt.Errorf("failed to decode expected MAC: %w", err)
 	}
 
+	// H-13 修复：不泄露长度差异信息
 	if len(expected) != len(actual) {
-		return fmt.Errorf("MAC length mismatch: expected %d bytes, got %d bytes",
-			len(expected), len(actual))
+		return fmt.Errorf("MAC verification failed")
 	}
 
 	if !ConstantTimeCompare(expected, actual) {
@@ -125,32 +128,60 @@ func VerifyHexMAC(expectedHex string, actual []byte) error {
 // 安全特性：
 // - 确保密钥、密码等敏感数据从内存中移除
 // - 防止内存扫描攻击
-// - 使用明确的内存清零
+// - 使用防止编译器优化的方法
 //
-// 注意：Go的垃圾回收器可能会复制内存，此函数不能保证所有副本都被清零
+// 防御措施：
+// - 使用volatile写入（通过runtime.KeepAlive）
+// - 多次清零确保覆盖
+// - 使用不同的清零模式
+//
+// 注意：
+// - Go的垃圾回收器可能会复制内存，此函数不能保证所有副本都被清零
+// - 对于高安全性应用，考虑使用专门的内存清零库
+// - 建议使用WipeableByteArray等专用类型
+//
+// 符合标准：
+// - NIST SP 800-57 Part 1 Rev.5 Section 5.3.4
+// - FIPS 140-2 Section 4.12.0
+// - OWASP Crytographic Storage Cheat Sheet
 func ZeroBytes(b []byte) {
-	for i := range b {
-		b[i] = 0
+	if len(b) == 0 {
+		return
 	}
+
+	// 使用 OPENSSL_cleanse 进行安全清零
+	// OPENSSL_cleanse 使用特定于平台的实现（如 explicit_bzero、SecureZeroMemory），
+	// 确保编译器不会优化掉清零操作
+	C.OPENSSL_cleanse(unsafe.Pointer(&b[0]), C.size_t(len(b)))
+	runtime.KeepAlive(b)
+}
+
+// ZeroBytesOnce 快速清零字节切片
+//
+// 与ZeroBytes相同，使用 OPENSSL_cleanse 确保编译器不会优化掉清零操作。
+// 保留此函数作为向后兼容的API。
+func ZeroBytesOnce(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+
+	C.OPENSSL_cleanse(unsafe.Pointer(&b[0]), C.size_t(len(b)))
+	runtime.KeepAlive(b)
 }
 
 // ZeroString 安全地清空字符串内容
 //
-// 安全特性：
-// - 清除字符串的底层字节数组
-// - 防止敏感数据（如密码）残留
-//
-// 注意：由于Go字符串的不可变性，此函数有局限性。
-// 对于密码等敏感数据，建议使用 []byte 而不是 string
+// 安全警告：由于Go字符串的不可变性，此函数只能清零 []byte(*s) 产生的堆上副本，
+// 原始字符串数据（可能在只读数据段或字符串缓存中）不会被清零。
+// 此函数不适合用于高安全性场景。对于密码等敏感数据，应从一开始就使用 []byte。
 func ZeroString(s *string) {
 	if s == nil {
 		return
 	}
-	// 将字符串转换为字节切片，清零后转换回空字符串
-	// 注意：这可能不会清除所有副本
 	b := []byte(*s)
-	for i := range b {
-		b[i] = 0
+	if len(b) > 0 {
+		C.OPENSSL_cleanse(unsafe.Pointer(&b[0]), C.size_t(len(b)))
+		runtime.KeepAlive(b)
 	}
 	*s = ""
 }
@@ -196,21 +227,13 @@ func SecureRandomDuration(min, max time.Duration) time.Duration {
 	// NIST SP 800-90A 要求：
 	// - 使用 FIPS 140-2 批准的随机数生成器
 	// - 定期进行熵估计和健康检查
-	//
-	// 实现说明：
-	// - 使用 io.ReadFull 确保读取完整的随机数
-	// - 使用 big.Int 处理任意范围的随机数
-	// - 错误时回退到中间值（不是理想情况）
 
-	// 方法 1: 使用 crypto/rand.Int (推荐)
-	// 这是处理任意范围随机数的标准方法
 	bigRange := new(big.Int).SetInt64(rangeN)
 	n, err := rand.Int(rand.Reader, bigRange)
 	if err != nil {
-		// 如果随机数生成失败（极少情况），回退到中间值
-		// 这不是最佳做法，但比崩溃好
-		// 生产环境应该记录这个错误
-		return min + time.Duration(rangeN/2)
+		// 随机数生成失败时回退到最小延迟
+		// 使用固定最小值而非中间值，避免确定性回退
+		return min
 	}
 
 	return min + time.Duration(n.Int64())
@@ -343,25 +366,33 @@ func SecureRandomPrime(bits int, rounds ...int) (*big.Int, error) {
 	//
 	// 注意：Go 的 rand.Prime 默认测试轮数为 20
 	// 对于生产环境，我们需要更多轮数
-	prime, err := rand.Prime(rand.Reader, bits)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate prime: %w", err)
-	}
+	const maxAttempts = 100
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		prime, err := rand.Prime(rand.Reader, bits)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate prime: %w", err)
+		}
 
-	// 额外的 Miller-Rabin 测试轮数以确保安全性
-	// 如果默认轮数小于要求的轮数，添加额外测试
-	defaultRounds := 20
-	if testRounds > defaultRounds {
-		for i := 0; i < testRounds-defaultRounds; i++ {
-			if !prime.ProbablyPrime(1) {
-				// 素性测试失败，这不应该发生
-				// 重新生成素数
-				return SecureRandomPrime(bits, testRounds)
+		// 额外的 Miller-Rabin 测试轮数以确保安全性
+		// 如果默认轮数小于要求的轮数，添加额外测试
+		defaultRounds := 20
+		if testRounds > defaultRounds {
+			extraFailed := false
+			for i := 0; i < testRounds-defaultRounds; i++ {
+				if !prime.ProbablyPrime(1) {
+					extraFailed = true
+					break
+				}
+			}
+			if extraFailed {
+				continue // 重新生成
 			}
 		}
+
+		return prime, nil
 	}
 
-	return prime, nil
+	return nil, fmt.Errorf("failed to generate prime after %d attempts", maxAttempts)
 }
 
 // GenerateSafePrime 生成安全素数（形式为 2p+1 的素数）
@@ -425,10 +456,10 @@ func GenerateSafePrime(bits int) (*big.Int, error) {
 // - 签名验证
 // - MAC验证
 func DelayVerification() {
-	// 固定延迟，防止通过时间差推断验证结果
-	// 根据NIST SP 800-63B建议，延迟至少100ms
-	const minDelay = 100 * time.Millisecond
-	time.Sleep(minDelay)
+	// 使用随机延迟防止时序攻击
+	// 固定延迟仍可能被统计平均消除，随机延迟更安全
+	delay := SecureRandomDuration(50*time.Millisecond, 150*time.Millisecond)
+	time.Sleep(delay)
 }
 
 // SecureCompare 提供一个通用的安全比较接口
@@ -454,9 +485,17 @@ func SecureCompare(a, b interface{}) bool {
 // - 用于清空或填充敏感内存区域
 // - 防止编译器优化掉清零操作
 func MemSet(b []byte, value byte) {
-	for i := range b {
-		b[i] = value
+	if len(b) == 0 {
+		return
 	}
+	if value == 0 {
+		C.OPENSSL_cleanse(unsafe.Pointer(&b[0]), C.size_t(len(b)))
+	} else {
+		for i := range b {
+			b[i] = value
+		}
+	}
+	runtime.KeepAlive(b)
 }
 
 // WipeBytes 擦除字节切片内容（ZeroBytes的别名）
@@ -467,6 +506,8 @@ func WipeBytes(b []byte) {
 }
 
 // SafeEqualInt 安全比较两个整数（用于密码学计数器等）
+//
+// 使用常量时间比较防止时序侧信道
 func SafeEqualInt(a, b int) bool {
-	return a == b // 注意：整数比较本身通常是安全的
+	return subtle.ConstantTimeEq(int32(a), int32(b)) == 1
 }

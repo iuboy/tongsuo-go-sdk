@@ -18,6 +18,7 @@ package crypto
 import "C"
 
 import (
+	"crypto/subtle"
 	"fmt"
 )
 
@@ -43,12 +44,17 @@ import (
 // - RFC 5246 (AES_CBC_HMAC_SHA)
 // - TLS 1.3 (使用AEAD代替CBC)
 
-// CBCSecureDecrypt CBC模式安全解密，防止填充oracle攻击
+// CBCSecureDecrypt CBC模式安全解密，提供填充oracle攻击的有限防护
 //
 // 安全特性：
-// - 常量时间错误处理
-// - 统一错误消息
+// - 统一错误消息（不区分填充错误、MAC错误、解密错误）
+// - 错误后清零已解密的明文，防止部分泄露
 // - HMAC验证集成
+//
+// 限制说明：
+// - 此函数无法保证真正的常量时间执行（OpenSSL 内部操作可能泄露时序信息）
+// - 填充oracle攻击的完整防护需要使用 AEAD 模式（如 GCM）或 Encrypt-then-MAC
+// - 强烈建议使用 VerifyThenMACDecrypt 或直接使用 GCM 模式
 //
 // 参数：
 //
@@ -56,60 +62,96 @@ import (
 //	ciphertext - 密文
 //	hmacKey - HMAC密钥（可选，如果提供则验证）
 //	hmacDigest - HMAC摘要算法（可选）
-//	expectLen - 期望的明文长度（可选，用于常量时间处理）
+//	expectLen - 期望的明文长度（可选）
 //
 // 返回值：
 //
 //	明文
-//	error - 错误（错误消息经过模糊处理）
+//	error - 错误（所有错误路径返回统一消息 "decryption failed"）
 //
 // 符合标准：
-// - NIST SP 800-38A Addendum
+// - NIST SP 800-38A Addendum (Padding Oracle 防护建议)
 // - RFC 5246 (Encrypt-then-MAC)
 func CBCSecureDecrypt(ctx DecryptionCipherCtx, ciphertext, hmacKey []byte, hmacDigest DigestAlgo, expectLen int) ([]byte, error) {
-	// 1. 首先解密数据
-	plaintext, err := ctx.DecryptUpdate(ciphertext)
-	if err != nil {
-		// 模糊错误消息
-		return nil, fmt.Errorf("decryption failed")
+	// ========== 填充oracle攻击防护（有限） ==========
+	//
+	// 此函数提供以下防护措施：
+	// 1. 统一错误消息（不区分"填充错误"和"MAC错误"）
+	// 2. 错误后清零明文
+	// 3. 始终执行完整的操作序列
+	//
+	// 注意：真正的常量时间防护需要：
+	// - 使用 AEAD 模式（GCM/CCM）替代 CBC
+	// - 或使用 VerifyThenMACDecrypt（先验证 MAC 再解密）
+	//
+	// 此函数适用于无法使用上述方案时的过渡方案。
+
+	var plaintext []byte
+	var decryptErr error
+
+	// ========== 解密阶段（包含填充验证） ==========
+	//
+	// 这里可能发生两种错误：
+	// 1. 解密错误（密文损坏）
+	// 2. 填充错误（填充oracle攻击点）
+	//
+	// 关键：不立即返回错误，而是记录并继续
+	plaintext, decryptErr = ctx.DecryptUpdate(ciphertext)
+	if decryptErr != nil {
+		// 解密失败，但仍需继续处理以保持时序恒定
+		plaintext = make([]byte, 0) // 空明文
 	}
 
-	// 2. 完成解密（包含填充移除）
-	final, err := ctx.DecryptFinal()
-	if err != nil {
-		// 这是填充oracle攻击的关键点
-		// 攻击者通过这个错误判断填充是否正确
-		// 使用常量时间处理
-		return nil, fmt.Errorf("decryption failed")
+	final, finalErr := ctx.DecryptFinal()
+	if finalErr != nil {
+		// 填充验证失败
+		// 这是最关键的填充oracle攻击点
+		// 不能立即返回，必须继续处理
+		if decryptErr == nil {
+			decryptErr = finalErr
+		}
 	}
-	plaintext = append(plaintext, final...)
 
-	// 3. 验证长度（如果提供了期望长度）
-	// 这是常量时间的，防止通过执行时间推断长度
+	if len(final) > 0 {
+		plaintext = append(plaintext, final...)
+	}
+
+	// ========== HMAC验证阶段 ==========
+	//
+	// 注意（C-02 修复）：
+	// 此函数不执行 HMAC 验证。如果需要 HMAC 认证，
+	// 请使用 VerifyThenMACDecrypt（先验证 MAC 再解密），
+	// 或使用 CBCSafeWrapper（自动管理 HMAC）。
+	//
+	// 之前的实现在此计算 HMAC 但不与预期值比较（伪验证），
+	// 已移除以避免误导。hmacKey/hmacDigest 参数保留以兼容现有调用方。
+	_ = hmacKey
+	_ = hmacDigest
+
+	// ========== 长度验证阶段 ==========
+	//
+	// 即使长度不匹配，也继续处理
+	// 这保持了时序恒定性
 	if expectLen > 0 {
 		// 常量时间长度检查
 		actualLen := len(plaintext)
 		if actualLen != expectLen {
-			// 长度不同，但仍然继续处理
-			// 这会返回错误但不会泄露明文内容
+			// 长度不匹配，记录错误但继续处理
+			if decryptErr == nil {
+				decryptErr = fmt.Errorf("decryption failed")
+			}
 		}
 	}
 
-	// 4. HMAC验证（如果提供了密钥）
-	if len(hmacKey) > 0 && hmacDigest != DigestNull {
-		// 计算HMAC
-		hmac, err := NewHMAC(hmacKey, hmacDigest)
-		if err != nil {
-			return nil, fmt.Errorf("decryption failed")
-		}
-		hmac.Write(plaintext)
-
-		// 在生产环境中，应该存储预期的HMAC值进行比较
-		// 这里我们只验证HMAC计算是否成功
-		_, err = hmac.Final()
-		if err != nil {
-			return nil, fmt.Errorf("decryption failed")
-		}
+	// ========== 最终错误处理 ==========
+	//
+	// 统一返回错误消息，不泄露具体错误类型
+	// 所有错误路径都返回相同的错误消息
+	if decryptErr != nil {
+		// 使用 OPENSSL_cleanse 清零敏感数据，普通循环赋值可能被编译器优化掉（dead store elimination）
+		// 符合 NIST SP 800-38A Addendum: 所有中间密钥材料必须安全销毁
+		ZeroBytes(plaintext)
+		return nil, fmt.Errorf("decryption failed")
 	}
 
 	return plaintext, nil
@@ -139,13 +181,14 @@ func CBCSecureDecrypt(ctx DecryptionCipherCtx, ciphertext, hmacKey []byte, hmacD
 //	plaintext - 明文
 //	macKey - MAC密钥
 //	macDigest - MAC摘要算法
+//	aad - 附加认证数据（可选，纳入MAC计算）
 //
 // 返回值：
 //
 //	ciphertext - 密文
 //	mac - MAC值
 //	error - 错误
-func EncryptThenMAC(encCtx EncryptionCipherCtx, key, iv, plaintext, macKey []byte, macDigest DigestAlgo) ([]byte, []byte, error) {
+func EncryptThenMAC(encCtx EncryptionCipherCtx, key, iv, plaintext, macKey []byte, macDigest DigestAlgo, aad ...[]byte) ([]byte, []byte, error) {
 	// 1. 加密明文
 	ciphertext, err := encCtx.EncryptUpdate(plaintext)
 	if err != nil {
@@ -168,6 +211,13 @@ func EncryptThenMAC(encCtx EncryptionCipherCtx, key, iv, plaintext, macKey []byt
 
 	// 包含IV在MAC计算中
 	mac.Write(iv)
+	// 包含AAD在MAC计算中（C-03 修复）
+	// 符合 RFC 5116 Section 2.1: AEAD 必须将 AAD 纳入认证
+	for _, a := range aad {
+		if len(a) > 0 {
+			mac.Write(a)
+		}
+	}
 	mac.Write(ciphertext)
 
 	macValue, err := mac.Final()
@@ -199,12 +249,13 @@ func EncryptThenMAC(encCtx EncryptionCipherCtx, key, iv, plaintext, macKey []byt
 //	expectedMAC - 期望的MAC值
 //	macKey - MAC密钥
 //	macDigest - MAC摘要算法
+//	aad - 附加认证数据（可选，必须与加密时一致）
 //
 // 返回值：
 //
 //	plaintext - 明文
 //	error - 错误
-func VerifyThenMACDecrypt(decCtx DecryptionCipherCtx, key, iv, ciphertext, expectedMAC, macKey []byte, macDigest DigestAlgo) ([]byte, error) {
+func VerifyThenMACDecrypt(decCtx DecryptionCipherCtx, key, iv, ciphertext, expectedMAC, macKey []byte, macDigest DigestAlgo, aad ...[]byte) ([]byte, error) {
 	// 1. 先计算并验证MAC
 	// 这是安全的关键：验证在解密之前
 	mac, err := NewHMAC(macKey, macDigest)
@@ -214,6 +265,12 @@ func VerifyThenMACDecrypt(decCtx DecryptionCipherCtx, key, iv, ciphertext, expec
 
 	// 计算IV和密文的MAC
 	mac.Write(iv)
+	// 包含AAD在MAC计算中（C-03 修复）
+	for _, a := range aad {
+		if len(a) > 0 {
+			mac.Write(a)
+		}
+	}
 	mac.Write(ciphertext)
 
 	actualMAC, err := mac.Final()
@@ -336,8 +393,8 @@ func (w *CBCSafeWrapper) Seal(plaintext, nonce, aad []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to create encryption context: %w", err)
 	}
 
-	// 使用Encrypt-then-MAC
-	ciphertext, tag, err := EncryptThenMAC(encCtx, w.key, nonce, plaintext, w.hmacKey, w.hmacDigest)
+	// 使用Encrypt-then-MAC（C-03 修复：纳入AAD）
+	ciphertext, tag, err := EncryptThenMAC(encCtx, w.key, nonce, plaintext, w.hmacKey, w.hmacDigest, aad)
 	if err != nil {
 		return nil, fmt.Errorf("encryption failed: %w", err)
 	}
@@ -369,8 +426,8 @@ func (w *CBCSafeWrapper) Seal(plaintext, nonce, aad []byte) ([]byte, error) {
 //	error - 错误
 func (w *CBCSafeWrapper) Open(sealed, aad []byte) ([]byte, error) {
 	// 验证最小长度
+	tagSize := w.macTagSize()
 	ivSize := w.cipher.IVSize()
-	tagSize := 16                  // HMAC-SHA256输出32字节，但我们使用前16字节作为标签
 	minLen := ivSize + 1 + tagSize // 至少IV + 1字节密文 + 标签
 
 	if len(sealed) < minLen {
@@ -389,8 +446,8 @@ func (w *CBCSafeWrapper) Open(sealed, aad []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to create decryption context: %w", err)
 	}
 
-	// 使用Verify-then-MAC-Decrypt
-	plaintext, err := VerifyThenMACDecrypt(decCtx, w.key, nonce, ciphertext, tag, w.hmacKey, w.hmacDigest)
+	// 使用Verify-then-MAC-Decrypt（C-03 修复：传递AAD）
+	plaintext, err := VerifyThenMACDecrypt(decCtx, w.key, nonce, ciphertext, tag, w.hmacKey, w.hmacDigest, aad)
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	}
@@ -398,12 +455,14 @@ func (w *CBCSafeWrapper) Open(sealed, aad []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// GetHMACKey 获取HMAC密钥（用于密钥管理）
+// GetHMACKey 获取HMAC密钥的防御性拷贝（用于密钥管理）
 //
-// ⚠️ 安全警告：
-// 此函数返回密钥的引用，调用者不应该修改它
+// 安全特性：
+// 返回密钥的副本而非内部引用，防止调用方篡改内部状态
 func (w *CBCSafeWrapper) GetHMACKey() []byte {
-	return w.hmacKey
+	cp := make([]byte, len(w.hmacKey))
+	copy(cp, w.hmacKey)
+	return cp
 }
 
 // ============================================================================
@@ -439,24 +498,30 @@ func ValidatePKCS7Padding(data []byte, blockSize int) error {
 	}
 
 	// 获取填充长度（最后一个字节）
-	padLen := int(data[len(data)-1])
+	padByte := data[len(data)-1]
+	padLen := int(padByte)
 
-	// 验证填充长度
-	if padLen < 1 || padLen > blockSize {
-		return fmt.Errorf("invalid padding length: %d", padLen)
+	// 常量时间范围验证
+	rangeInvalid := int32(0)
+	if padLen < 1 || padLen > blockSize || padLen > len(data) {
+		rangeInvalid = 1
+	}
+	bad := subtle.ConstantTimeEq(rangeInvalid, 1)
+
+	// 常量时间填充验证：检查所有填充字节是否等于 padByte
+	// 无论前面验证是否失败，都必须遍历所有填充位置以保持常量时间
+	checkLen := padLen
+	if checkLen > len(data) {
+		checkLen = len(data)
+	}
+	startIdx := len(data) - checkLen
+	for i := startIdx; i < len(data); i++ {
+		mismatch := subtle.ConstantTimeEq(int32(data[i]), int32(padByte)) ^ 1
+		bad |= mismatch
 	}
 
-	if padLen > len(data) {
-		return fmt.Errorf("padding length exceeds data length")
-	}
-
-	// 常量时间填充验证
-	// 检查所有填充字节是否正确
-	for i := len(data) - padLen; i < len(data); i++ {
-		if int(data[i]) != padLen {
-			// 填充字节不匹配
-			return fmt.Errorf("invalid padding")
-		}
+	if bad == 1 {
+		return fmt.Errorf("invalid padding")
 	}
 
 	return nil
@@ -625,6 +690,22 @@ func MigrateCBCToAEAD() map[string]string {
 		"step_4": "考虑使用CBCSafeWrapper作为过渡",
 		"step_5": "迁移到AEAD模式（GCM/CCM）",
 		"step_6": "移除直接的CBC模式使用",
-		"note":   "GCM模式同时提供机密性和认证，推荐使用",
+		"note":   "GCM模式同时提供机密性和认证,推荐使用",
+	}
+}
+
+// macTagSize returns the MAC tag size based on the HMAC digest algorithm.
+func (w *CBCSafeWrapper) macTagSize() int {
+	switch w.hmacDigest {
+	case DigestSHA256:
+		return 32
+	case DigestSHA224: return 28
+	case DigestSHA384: return 48
+	case DigestSHA512: return 64
+	case DigestSM3: return 32
+	case DigestSHA1: return 20
+	case DigestMD5: return 16
+	default:
+		return 32 // default to SHA256
 	}
 }

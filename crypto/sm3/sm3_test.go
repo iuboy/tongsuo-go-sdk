@@ -80,7 +80,10 @@ BBE7D89A9DC21917F17799E698531F5E6E3E10BD31370B259C3F81C3A3733071300F0603551D1301
 
 	for _, tt := range testData {
 		buf, _ := hex.DecodeString(strings.ReplaceAll(tt.in, "\n", ""))
-		got := sm3.Sum(buf)
+		got, err := sm3.Sum(buf)
+		if err != nil {
+			t.Fatalf("sm3.Sum failed: %v", err)
+		}
 		expected, _ := hex.DecodeString(tt.out)
 
 		if !bytes.Equal(expected, got[:]) {
@@ -89,9 +92,7 @@ BBE7D89A9DC21917F17799E698531F5E6E3E10BD31370B259C3F81C3A3733071300F0603551D1301
 	}
 }
 
-type sm3func func([]byte)
-
-func benchmarkSM3(b *testing.B, length int64, fn sm3func) {
+func benchmarkSM3(b *testing.B, length int64) {
 	b.Helper()
 
 	buf := make([]byte, length)
@@ -103,18 +104,18 @@ func benchmarkSM3(b *testing.B, length int64, fn sm3func) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		fn(buf)
+		sm3.Sum(buf)
 	}
 }
 
 func BenchmarkSM3Large(b *testing.B) {
-	benchmarkSM3(b, 1024*1024, func(buf []byte) { sm3.Sum(buf) })
+	benchmarkSM3(b, 1024*1024)
 }
 
 func BenchmarkSM3Normal(b *testing.B) {
-	benchmarkSM3(b, 1024, func(buf []byte) { sm3.Sum(buf) })
+	benchmarkSM3(b, 1024)
 }
 
 func BenchmarkSM3Small(b *testing.B) {
-	benchmarkSM3(b, 1, func(buf []byte) { sm3.Sum(buf) })
+	benchmarkSM3(b, 1)
 }

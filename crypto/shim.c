@@ -200,6 +200,10 @@ void X_EVP_CIPHER_CTX_free(EVP_CIPHER_CTX *ctx) {
 	EVP_CIPHER_CTX_free(ctx);
 }
 
+int X_EVP_CIPHER_CTX_reset(EVP_CIPHER_CTX *ctx) {
+	return EVP_CIPHER_CTX_reset(ctx);
+}
+
 const EVP_CIPHER *X_EVP_sm4_ecb() {
 	return EVP_sm4_ecb();
 }
@@ -349,27 +353,6 @@ int X_tscrypto_init() {
 
 	// OpenSSL 3.x: 线程安全回调已变成空宏，不再需要设置
 	// 在 OpenSSL 3.x 中，线程安全由库内部处理
-	//
-	// Set up OPENSSL thread safety callbacks.
-	// rc = go_init_locks();
-	// if (rc != 0) {
-	// 	return rc;
-	// }
-	// CRYPTO_set_locking_callback(go_thread_locking_callback);
-	// CRYPTO_set_id_callback(go_thread_id_callback);
-
-	rc = x_bio_init_methods();
-
-	// OpenSSL 3.x: 线程安全回调已变成空宏，不再需要设置
-	// 在 OpenSSL 3.x 中，线程安全由库内部处理
-	//
-	// Set up OPENSSL thread safety callbacks.
-	// rc = go_init_locks();
-	// if (rc != 0) {
-	// 	return rc;
-	// }
-	// CRYPTO_set_locking_callback(go_thread_locking_callback);
-	// CRYPTO_set_id_callback(go_thread_id_callback);
 
 	rc = x_bio_init_methods();
 	if (rc != 0) {
@@ -591,49 +574,103 @@ ECDSA_SIG *X_d2i_ECDSA_SIG(ECDSA_SIG **psig, const unsigned char **ppin, long le
 // - CBC 模式：配合 HMAC/MAC 使用以提供完整性保护
 // - 直接使用 EVP_EncryptInit/EVP_DecryptInit 高级 API
 //
-// 参考：GB/T 17929-2012, NIST SP 800-38A
+// 参考：GB/T 32907-2016, NIST SP 800-38A
+//
+// SM4_KEY 结构体说明：
+// - rk[0..rk[3]（前16字节）：存储原始 SM4 密钥
+// - rk[4..rk[31]（后112字节）：始终为零（OPENSSL_cleanse 清零）
+// SM4_encrypt/SM4_decrypt 从 rk[0..rk[3] 提取16字节作为 EVP 密钥
 
 void SM4_set_key(const unsigned char *key, SM4_KEY *ks) {
-    // 保存密钥到 ks->rk 数组
-    // 注意：Go 代码期望 ks->rk 是 [32]uint32，但我们这里只需要存储 16 字节的密钥
-    if (ks && key) {
-        memcpy(ks->rk, key, 16);
+    if (!ks || !key) {
+        return;
     }
+
+    // 安全清零整个结构体（128字节）
+    // 防止残留密钥材料泄露到 rk[4..rk[31] 区域
+    OPENSSL_cleanse(ks, sizeof(SM4_KEY));
+
+    // 将原始 16 字节密钥存储在 rk[0..rk[3]
+    // rk 是 uint32_t[32]，前4个元素共 16 字节，恰好等于 SM4 密钥长度
+    // 符合 GB/T 32907-2016 SM4 分组密码算法（密钥长度 128 位）
+    memcpy(ks->rk, key, 16);
+
+    // rk[4..rk[31] 保持为零（已由 OPENSSL_cleanse 清零）
+    // SM4_encrypt/SM4_decrypt 仅读取前16字节作为 EVP 密钥
 }
 
-void SM4_encrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks) {
-    if (in && out && ks) {
-        EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-        const EVP_CIPHER *cipher = EVP_sm4_ecb();
+int SM4_encrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks) {
+    EVP_CIPHER_CTX *ctx = NULL;
+    int ret = 0;
 
-        if (ctx && cipher) {
-            // ks->rk 存储的是原始密钥（16 字节）
-            EVP_EncryptInit_ex(ctx, cipher, NULL, (const unsigned char*)ks->rk, NULL);
-            int outlen;
-            EVP_EncryptUpdate(ctx, out, &outlen, in, 16);
-            EVP_EncryptFinal_ex(ctx, out + outlen, &outlen);
-        }
-
-        if (ctx) EVP_CIPHER_CTX_free(ctx);
+    if (!in || !out || !ks) {
+        return 0;
     }
+
+    ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return 0;
+    }
+
+    if (EVP_EncryptInit_ex(ctx, EVP_sm4_ecb(), NULL,
+                           (const unsigned char*)ks->rk, NULL) != 1) {
+        goto err;
+    }
+
+    EVP_CIPHER_CTX_set_padding(ctx, 0);
+
+    int outlen = 0;
+    if (EVP_EncryptUpdate(ctx, out, &outlen, in, 16) != 1) {
+        goto err;
+    }
+
+    int finalLen = 0;
+    if (EVP_EncryptFinal_ex(ctx, out + outlen, &finalLen) != 1) {
+        goto err;
+    }
+
+    ret = 1;
+
+err:
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    return ret;
 }
 
-void SM4_decrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks) {
-    if (in && out && ks) {
-        EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-        const EVP_CIPHER *cipher = EVP_sm4_ecb();
+int SM4_decrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks) {
+    EVP_CIPHER_CTX *ctx = NULL;
+    int ret = 0;
 
-        if (ctx && cipher) {
-            // ks->rk 存储的是原始密钥（16 字节）
-            EVP_DecryptInit_ex(ctx, cipher, NULL, (const unsigned char*)ks->rk, NULL);
-            EVP_CIPHER_CTX_set_padding(ctx, 0);  // 禁用 padding，因为 ECB 模式处理单个块
-            int outlen;
-            EVP_DecryptUpdate(ctx, out, &outlen, in, 16);
-            EVP_DecryptFinal_ex(ctx, out + outlen, &outlen);
-        }
-
-        if (ctx) EVP_CIPHER_CTX_free(ctx);
+    if (!in || !out || !ks) {
+        return 0;
     }
+
+    ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return 0;
+    }
+
+    if (EVP_DecryptInit_ex(ctx, EVP_sm4_ecb(), NULL,
+                           (const unsigned char*)ks->rk, NULL) != 1) {
+        goto err;
+    }
+
+    EVP_CIPHER_CTX_set_padding(ctx, 0);
+
+    int outlen = 0;
+    if (EVP_DecryptUpdate(ctx, out, &outlen, in, 16) != 1) {
+        goto err;
+    }
+
+    int finalLen = 0;
+    if (EVP_DecryptFinal_ex(ctx, out + outlen, &finalLen) != 1) {
+        goto err;
+    }
+
+    ret = 1;
+
+err:
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    return ret;
 }
 
 // NTLS (国密 TLS) 双证书函数实现在 shim.c 中定义
@@ -684,151 +721,80 @@ int X_EVP_PKEY_pairwise_check(const EVP_PKEY *pkey)
 
 // X_EVP_KDF_derive 使用 HKDF (RFC 5869) 从共享秘密派生密钥
 //
+// 使用 OpenSSL 3.x / Tongsuo 8.5 的 EVP_KDF API 实现，
+// 替代手写 HKDF 以确保正确性和安全性。
+//
 // 参数：
 //   md - 摘要算法 (推荐 SHA-256 或更强)
 //   key - 输入密钥材料 (共享秘密)
 //   key_len - 输入密钥材料长度
-//   salt - 盐值 (可选，NULL 表示不使用)
+//   salt - 盐值 (可选，NULL 且 salt_len==0 表示不使用)
 //   salt_len - 盐值长度
-//   info - 上下文信息 (可选，NULL 表示不使用)
+//   info - 上下文信息 (可选，NULL 且 info_len==0 表示不使用)
 //   info_len - 上下文信息长度
 //   out - 输出缓冲区
 //   out_len - 输出长度
 //
-// 安全特性：
-// - 使用标准 HKDF-Extract-and-Expand 流程
-// - 支持可选的盐值增加安全性
-// - 支持上下文信息绑定
-// - 防止密钥重用攻击
-//
 // 符合标准：
+// - RFC 5869 (HKDF)
 // - NIST SP 800-56C (Recommendation for Key Derivation)
-// - RFC 5869 (HMAC-based Extract-and-Expand Key Derivation Function)
-// - NIST SP 800-108 (Recommendation for Key Derivation Using Pseudorandom Functions)
 //
-// 返回值：1 表示成功，0 或负值表示失败
+// 返回值：1 表示成功，0 表示失败
 int X_EVP_KDF_derive(const EVP_MD *md,
                     const unsigned char *key, size_t key_len,
                     const unsigned char *salt, size_t salt_len,
                     const unsigned char *info, size_t info_len,
                     unsigned char *out, size_t out_len)
 {
-	HMAC_CTX *hmac_ctx = NULL;
-	unsigned char prk[EVP_MAX_MD_SIZE];
-	size_t prk_len = EVP_MD_size(md);
-	unsigned char *T = NULL;
-	size_t T_len = 0;
-	size_t iter;
+	EVP_KDF *kdf = NULL;
+	EVP_KDF_CTX *kctx = NULL;
+	OSSL_PARAM params[6];
 	int ret = 0;
 
-	// 参数验证
-	if (!md || !key || !out) {
+	if (!md || !key || !out || key_len == 0 || out_len == 0) {
 		return 0;
 	}
 
-	if (key_len == 0) {
+	// 验证有长度参数对应的指针非 NULL
+	if ((salt_len > 0 && !salt) || (info_len > 0 && !info)) {
 		return 0;
 	}
 
-	// HKDF-Extract: 从输入密钥材料和盐值提取伪随机密钥
-	// 如果没有提供盐值，使用零填充的盐值
-	if (salt == NULL) {
-		// 使用摘要长度的零盐值 (RFC 5869 Section 2.2)
-		salt_len = EVP_MD_size(md);
-	}
-
-	hmac_ctx = HMAC_CTX_new();
-	if (!hmac_ctx) {
+	kdf = EVP_KDF_fetch(NULL, "HKDF", NULL);
+	if (!kdf) {
 		goto err;
 	}
 
-	// Extract: PRK = HMAC-Hash(salt, IKM)
-	if (HMAC_Init_ex(hmac_ctx, salt, salt_len, md, NULL) != 1) {
-		goto err;
-	}
-	if (HMAC_Update(hmac_ctx, key, key_len) != 1) {
-		goto err;
-	}
-	if (HMAC_Final(hmac_ctx, prk, (unsigned int *)&prk_len) != 1) {
+	kctx = EVP_KDF_CTX_new(kdf);
+	if (!kctx) {
 		goto err;
 	}
 
-	// HKDF-Expand: 从伪随机密钥派生输出密钥
-	// OKM = HMAC-Hash(PRK, T(0) | info | 0x01) |
-	//              HMAC-Hash(PRK, T(1) | info | 0x02) |
-	//              ...
-	// 其中 T(0) = 空字符串 (长度为 0)
-	//       T(i) = 前 i 个输出块的前 L 字节
-	//
-	// RFC 5869 Section 2.3
-	T = OPENSSL_malloc(out_len + EVP_MAX_MD_SIZE);
-	if (!T) {
-		goto err;
+	const char *digest_name = EVP_MD_name(md);
+	size_t idx = 0;
+
+	params[idx++] = OSSL_PARAM_construct_utf8_string("digest",
+		(char *)digest_name, 0);
+	params[idx++] = OSSL_PARAM_construct_octet_string("key",
+		(void *)key, key_len);
+
+	if (salt != NULL && salt_len > 0) {
+		params[idx++] = OSSL_PARAM_construct_octet_string("salt",
+			(void *)salt, salt_len);
 	}
 
-	for (iter = 1; ; iter++) {
-		size_t copy_len;
-		unsigned char ctr = (unsigned char)iter;
-
-		// 准备 HMAC 输入: T(i-1) | info | counter
-		HMAC_CTX_reset(hmac_ctx);
-		if (HMAC_Init_ex(hmac_ctx, prk, prk_len, md, NULL) != 1) {
-			goto err;
-		}
-
-		// 添加 T(i-1) (前一次的输出，第一次为空)
-		if (iter > 1) {
-			if (HMAC_Update(hmac_ctx, T, T_len) != 1) {
-				goto err;
-			}
-		}
-
-		// 添加 info (上下文信息)
-		if (info && info_len > 0) {
-			if (HMAC_Update(hmac_ctx, info, info_len) != 1) {
-				goto err;
-			}
-		}
-
-		// 添加 counter
-		if (HMAC_Update(hmac_ctx, &ctr, 1) != 1) {
-			goto err;
-		}
-
-		// 计算 HMAC
-		if (HMAC_Final(hmac_ctx, T + T_len, (unsigned int *)&copy_len) != 1) {
-			goto err;
-		}
-
-		// 计算总输出长度
-		T_len += copy_len;
-		if (T_len >= out_len) {
-			// 已生成足够的输出
-			break;
-		}
-
-		// 安全检查：防止无限循环
-		if (iter > 255) {
-			// HKDF 最多支持 255*hash_len 字节输出
-			goto err;
-		}
+	if (info != NULL && info_len > 0) {
+		params[idx++] = OSSL_PARAM_construct_octet_string("info",
+			(void *)info, info_len);
 	}
 
-	// 复制结果到输出缓冲区
-	memcpy(out, T, out_len);
-	ret = 1;
+	params[idx] = OSSL_PARAM_construct_end();
+
+	ret = EVP_KDF_derive(kctx, out, out_len, params);
 
 err:
-	if (hmac_ctx) {
-		HMAC_CTX_free(hmac_ctx);
-	}
-	if (T) {
-		// 安全清零敏感数据
-		OPENSSL_cleanse(T, out_len + EVP_MAX_MD_SIZE);
-		OPENSSL_free(T);
-	}
-	// 清零 PRK (虽然它将从栈中消失，但安全起见)
-	OPENSSL_cleanse(prk, sizeof(prk));
+	if (kctx) EVP_KDF_CTX_free(kctx);
+	if (kdf) EVP_KDF_free(kdf);
 
 	return ret;
 }
@@ -878,7 +844,14 @@ static int ssl_ticket_key_cb(SSL *ssl,
 }
 
 // X_SSL_CTX_ticket_key_cb 导出函数指针给 Go 使用
+// 初始化为 NULL，由根包 init() 通过 X_set_ticket_key_thunk() 设置
 static SSL_CTX_tlsext_ticket_key_cb_fn X_SSL_CTX_ticket_key_cb_ptr = NULL;
+
+// X_set_ticket_key_thunk 设置 ticket key 回调 thunk（由根包 sni.c 的 thunk 实现）
+void X_set_ticket_key_thunk(SSL_CTX_tlsext_ticket_key_cb_fn thunk)
+{
+	X_SSL_CTX_ticket_key_cb_ptr = thunk;
+}
 
 // 设置实际的回调函数（由 Go 调用）
 void X_SSL_CTX_set_tlsext_ticket_key_cb(SSL_CTX *ctx, SSL_CTX_tlsext_ticket_key_cb_fn cb)
@@ -924,7 +897,15 @@ long X_SSL_clear_options(SSL *ssl, long options)
 }
 
 // SSL verify callback function pointer
+// 初始化为 NULL，由根包 init() 通过 X_set_ssl_verify_thunk() 设置
+// crypto 独立测试时保持 NULL（crypto 测试不需要 SSL 验证回调）
 static SSL_verify_cb_fn g_ssl_verify_cb = NULL;
+
+// X_set_ssl_verify_thunk 设置 SSL 验证回调 thunk（由根包 sni.c 的 thunk 实现）
+void X_set_ssl_verify_thunk(SSL_verify_cb_fn thunk)
+{
+	g_ssl_verify_cb = thunk;
+}
 
 // X_SSL_verify_cb 获取 SSL 验证回调函数指针
 SSL_verify_cb_fn* X_SSL_verify_cb(void)
@@ -970,7 +951,7 @@ long X_SSL_CTX_clear_options(SSL_CTX *ctx, long options)
 
 long X_SSL_CTX_get_mode(const SSL_CTX *ctx)
 {
-	return SSL_CTX_get_mode(ctx);
+	return SSL_CTX_get_mode((SSL_CTX *)ctx);
 }
 
 long X_SSL_CTX_set_mode(SSL_CTX *ctx, long mode)
@@ -990,7 +971,7 @@ long X_SSL_CTX_set_timeout(SSL_CTX *ctx, long t)
 
 long X_SSL_CTX_sess_get_cache_size(const SSL_CTX *ctx)
 {
-	return SSL_CTX_sess_get_cache_size(ctx);
+	return SSL_CTX_sess_get_cache_size((SSL_CTX *)ctx);
 }
 
 long X_SSL_CTX_sess_set_cache_size(SSL_CTX *ctx, long t)
@@ -1061,7 +1042,14 @@ int X_X509_add_ref(X509 *x509)
 }
 
 // SSL_CTX verify callback
+// 初始化为 NULL，由根包 init() 通过 X_set_ssl_ctx_verify_thunk() 设置
 static SSL_CTX_verify_cb_fn g_ssl_ctx_verify_cb = NULL;
+
+// X_set_ssl_ctx_verify_thunk 设置 SSL_CTX 验证回调 thunk（由根包 sni.c 的 thunk 实现）
+void X_set_ssl_ctx_verify_thunk(SSL_CTX_verify_cb_fn thunk)
+{
+	g_ssl_ctx_verify_cb = thunk;
+}
 
 SSL_CTX_verify_cb_fn* X_SSL_CTX_verify_cb(void)
 {

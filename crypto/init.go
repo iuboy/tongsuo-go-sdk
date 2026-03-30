@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 var (
@@ -49,12 +50,18 @@ var (
 	ErrEmptyKey            = errors.New("empty key")
 	ErrNoData              = errors.New("no data")
 	ErrInvalidKeySize      = errors.New("invalid key size")
+	ErrDecryptionFailed   = errors.New("decryption failed")
 )
 
 // 安全模式配置
-// 通过环境变量 TONGSUO_DETAILED_ERRORS=1 启用详细错误信息
+// 通过环境变量 TONGSUO_DETAILED_ERRORS=true 启用详细错误信息
 // 生产环境应该禁用详细错误以防止信息泄露
-var detailedErrors = os.Getenv("TONGSUO_DETAILED_ERRORS") == "true"
+// 使用 atomic.Bool 保证并发读写的线程安全
+var detailedErrors atomic.Bool
+
+func init() {
+	detailedErrors.Store(os.Getenv("TONGSUO_DETAILED_ERRORS") == "true")
+}
 
 func init() {
 	if rc := C.X_tscrypto_init(); rc != 0 {
@@ -86,7 +93,7 @@ func PopError() error {
 	}
 
 	// 根据环境变量决定返回的错误详细程度
-	if detailedErrors {
+	if detailedErrors.Load() {
 		// 开发环境：返回详细错误信息
 		if len(errs) == 0 {
 			return errors.New("cryptographic operation failed (unknown error)")
@@ -111,25 +118,6 @@ func PopError() error {
 	return errors.New("cryptographic operation failed")
 }
 
-// collectErrors 内部函数：收集所有OpenSSL错误用于日志记录
-//
-// 此函数用于将详细错误信息记录到安全日志系统，
-// 供安全团队分析，但不向用户暴露。
-func collectErrors() []string {
-	var errs []string
-	for {
-		err := C.ERR_get_error()
-		if err == 0 {
-			break
-		}
-		errs = append(errs, fmt.Sprintf("%s:%s:%s",
-			C.GoString(C.ERR_lib_error_string(err)),
-			C.GoString(C.ERR_func_error_string(err)),
-			C.GoString(C.ERR_reason_error_string(err))))
-	}
-	return errs
-}
-
 // SetDetailedErrors 设置是否返回详细错误信息
 //
 // 安全警告：
@@ -137,10 +125,10 @@ func collectErrors() []string {
 // - 生产环境必须保持禁用状态
 // - 启用后可能泄露敏感实现信息
 func SetDetailedErrors(enabled bool) {
-	detailedErrors = enabled
+	detailedErrors.Store(enabled)
 }
 
 // IsDetailedErrorsEnabled 返回当前是否启用了详细错误
 func IsDetailedErrorsEnabled() bool {
-	return detailedErrors
+	return detailedErrors.Load()
 }

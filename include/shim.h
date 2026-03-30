@@ -31,6 +31,8 @@
 #include <openssl/ec.h>
 #include <openssl/opensslv.h>
 #include <openssl/ssl.h>
+#include <openssl/kdf.h>
+#include <openssl/params.h>
 
 // SM4 兼容层（Tongsuo 8.5.0+）
 // 使用内部头文件 crypto/sm4.h 中的定义
@@ -42,10 +44,11 @@ typedef struct SM4_KEY_st {
     uint32_t rk[32];  // SM4_KEY_SCHEDULE = 32
 } SM4_KEY;
 
-// SM4 函数声明（使用内部 ossl_sm4_* 函数实现）
+// SM4 函数声明（使用 EVP API 实现）
+// 返回值：1 表示成功，0 表示失败
 extern void SM4_set_key(const unsigned char *key, SM4_KEY *ks);
-extern void SM4_encrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks);
-extern void SM4_decrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks);
+extern int SM4_encrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks);
+extern int SM4_decrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks);
 
 /* shim  methods */
 extern int X_tscrypto_init();
@@ -119,6 +122,7 @@ extern const EVP_CIPHER *X_EVP_CIPHER_CTX_cipher(EVP_CIPHER_CTX *ctx);
 extern int X_EVP_CIPHER_CTX_encrypting(const EVP_CIPHER_CTX *ctx);
 extern EVP_CIPHER_CTX *X_EVP_CIPHER_CTX_new();
 extern void X_EVP_CIPHER_CTX_free(EVP_CIPHER_CTX *ctx);
+extern int X_EVP_CIPHER_CTX_reset(EVP_CIPHER_CTX *ctx);
 extern const EVP_CIPHER *X_EVP_sm4_ecb();
 extern int X_EVP_EncryptInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl, const unsigned char *key, const unsigned char *iv);
 extern int X_EVP_EncryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl);
@@ -314,5 +318,13 @@ extern int X_SSL_set_tlsext_host_name(SSL *ssl, const char *name);
 /* STACK_OF(X509) accessor functions */
 extern int X_sk_X509_num(const STACK_OF(X509) *sk);
 extern X509* X_sk_X509_value(const STACK_OF(X509) *sk, int index);
+
+/* Cross-CGO-unit thunk initialization (implemented in sni.c) */
+extern void X_init_crypto_thunks(void);
+
+/* Cross-CGO-unit thunk setters (implemented in crypto/shim.c) */
+extern void X_set_ssl_verify_thunk(SSL_verify_cb_fn thunk);
+extern void X_set_ssl_ctx_verify_thunk(SSL_CTX_verify_cb_fn thunk);
+extern void X_set_ticket_key_thunk(SSL_CTX_tlsext_ticket_key_cb_fn thunk);
 
 #endif /* TONGSUO_GO_SDK_CRYPTO_SHIM_H */

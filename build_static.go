@@ -17,8 +17,11 @@
 
 package tongsuogo
 
-// #cgo linux LDFLAGS: -extldflags -static -lssl
-// #cgo darwin LDFLAGS: -extldflags -static -lssl
-// #cgo windows CFLAGS: -DWIN32_LEAN_AND_MEAN
-// #cgo windows LDFLAGS: -extldflags -static -lssl
+// #cgo CFLAGS: -I${SRCDIR}/include
+// #cgo linux CFLAGS: -I/opt/local/tongsuo/include
+// #cgo linux LDFLAGS: -L/opt/local/tongsuo/lib -extldflags -static -lssl
+// #cgo darwin CFLAGS: -I/opt/local/tongsuo/include
+// #cgo darwin LDFLAGS: -L/opt/local/tongsuo/lib -extldflags -static -lssl
+// #cgo windows CFLAGS: -DWIN32_LEAN_AND_MEAN -I/opt/local/tongsuo/include
+// #cgo windows LDFLAGS: -L/opt/local/tongsuo/lib -extldflags -static -lssl
 import "C"

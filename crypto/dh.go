@@ -17,8 +17,8 @@ package crypto
 // #include "shim.h"
 import "C"
 import (
+	"crypto/rand"
 	"fmt"
-	"runtime"
 )
 
 // DHSecurityLevel 定义DH密钥交换的安全级别
@@ -90,7 +90,7 @@ func DefaultDHKDFConfig() *DHKDFConfig {
 		UseKDF:          true,
 		KDFDigest:       SHA256Method(),
 		KDFTLS13Version: false,
-		KDFSalt:         nil, // 将生成随机盐值
+		KDFSalt:         nil, // 未设置时 applyKDF 自动生成随机盐值
 		KDFInfo:         []byte("tongsuo-go-sdk-dh-kdf"),
 	}
 }
@@ -192,6 +192,39 @@ func DeriveSharedSecretWithSecurityLevel(
 		kdfConfig = DefaultDHKDFConfig()
 	}
 
+	// ========== 密钥派生函数（KDF）安全检查 ==========
+	//
+	// 安全警告：直接使用原始DH共享秘密存在严重安全风险
+	//
+	// 攻击场景：
+	// 1. 小subgroup攻击：攻击者提供小阶元素，导致部分密钥泄露
+	// 2. 无效曲线攻击：提供不在曲线上的点，获取密钥信息
+	// 3. 密钥重用攻击：原始共享秘密直接用作密钥，易受攻击
+	//
+	// 防护措施：
+	// - KDF（密钥派生函数）可以均匀化共享秘密
+	// - KDF添加上下文绑定（盐值、info）
+	// - KDF防止密钥重用攻击
+	//
+	// 符合标准：
+	// - NIST SP 800-56C Recommendation 1: "Key derivation should be used"
+	// - NIST SP 800-56A Section 5.7.1.2: "ASecret rawKeying material should be cryptographically derived"
+	// - RFC 5869 (HKDF)
+	// - GB/T 37092-2018 (国密KDF)
+	//
+	if !kdfConfig.UseKDF {
+		// 所有安全级别都强制使用KDF
+		// 符合 NIST SP 800-56C Recommendation 1: "Key derivation should be used"
+		return nil, fmt.Errorf("KDF is required for security level %d: "+
+			"Using raw DH shared secrets is insecure and violates NIST SP 800-56C Recommendation 1. "+
+			"Security risks: "+
+			"1. Small subgroup attacks can leak partial key material, "+
+			"2. Invalid curve attacks can recover private keys, "+
+			"3. Key reuse attacks become feasible. "+
+			"Solution: Set kdfConfig.UseKDF = true",
+			securityLevel)
+	}
+
 	// 创建密钥派生上下文
 	dhCtx := C.X_EVP_PKEY_CTX_new(private.EvpPKey(), nil)
 	if dhCtx == nil {
@@ -236,12 +269,16 @@ func DeriveSharedSecretWithSecurityLevel(
 	}
 
 	if securityLevel >= DHSecurityLevelStandard {
-		// 额外的验证：检查密钥对一致性
-		if C.X_EVP_PKEY_pairwise_check(public.EvpPKey()) != 1 {
+		// 额外的验证：检查本地密钥对一致性
+		// EVP_PKEY_pairwise_check 验证私钥与对应公钥的一致性
+		// 注意：此检查针对本地密钥对，而非对方公钥
+		// 对方公钥的验证已通过上面的 public_check 完成
+		// 符合 NIST SP 800-56A Rev.3 Section 6.1.6
+		if C.X_EVP_PKEY_pairwise_check(private.EvpPKey()) != 1 {
 			result.ValidationErrors = append(result.ValidationErrors,
-				fmt.Errorf("peer key pairwise check failed: %w", PopError()))
-			// 注意：这可能是警告而不是错误，取决于应用场景
-			// 某些协议（如TLS）允许不完整的密钥对
+				fmt.Errorf("local key pair consistency check failed: %w", PopError()))
+			// 本地密钥对不一致是严重错误，应中止
+			return nil, fmt.Errorf("local key pair consistency check failed: %w", PopError())
 		}
 	}
 
@@ -298,33 +335,21 @@ func DeriveSharedSecretWithSecurityLevel(
 	// - GB/T 37092-2018 (国密KDF)
 
 	var finalSecret []byte
+	var err error
 
 	if kdfConfig.UseKDF {
 		// 使用KDF派生最终密钥
-		finalSecret, err := applyKDF(rawSecret, kdfConfig, securityLevel)
+		finalSecret, err = applyKDF(rawSecret, kdfConfig, securityLevel)
 		if err != nil {
 			return nil, fmt.Errorf("KDF failed: %w", err)
 		}
 
 		// 安全清零原始共享秘密
-		// 虽然Go的垃圾回收会处理，但我们主动清零更安全
-		for i := range rawSecret {
-			rawSecret[i] = 0
-		}
+		ZeroBytes(rawSecret)
 
 		result.SharedSecret = finalSecret
 	} else {
-		// 直接使用原始共享秘密
-		// 注意：生产环境应启用KDF以提高安全性
-		if securityLevel >= DHSecurityLevelStandard {
-			// 记录安全警告
-			runtime.SetFinalizer(&finalSecret, func(sec *[]byte) {
-				for i := range *sec {
-					(*sec)[i] = 0
-				}
-			})
-		}
-
+		// 直接使用原始共享秘密（此路径在KDF强制模式下不可达）
 		result.SharedSecret = rawSecret
 	}
 
@@ -368,16 +393,25 @@ func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLev
 	var infoLen C.size_t
 
 	// 处理盐值
-	// 如果未提供盐值，使用摘要长度的零值
-	// RFC 5869 Section 2.2 推荐使用随机盐值
+	// RFC 5869 Section 2.2 & NIST SP 800-56C Section 5.4：
+	// 盐值应为随机生成，防止相关的密钥派生攻击
+	// 当调用方未提供盐值时，自动生成与摘要输出等长的随机盐值
+	var generatedSalt []byte
 	if len(config.KDFSalt) > 0 {
 		saltPtr = (*C.uchar)(&config.KDFSalt[0])
 		saltLen = C.size_t(len(config.KDFSalt))
 	} else {
-		// 未提供盐值时，使用零盐值
-		// 这符合 RFC 5869 但不如随机盐值安全
-		saltLen = C.size_t(C.X_EVP_MD_size(digest))
+		// 生成随机盐值（长度与摘要输出一致，RFC 5869 推荐）
+		// SHA-256 输出 32 字节，SM3 输出 32 字节
+		generatedSalt = make([]byte, 32)
+		if _, err := rand.Read(generatedSalt); err != nil {
+			return nil, fmt.Errorf("failed to generate random KDF salt: %w", err)
+		}
+		saltPtr = (*C.uchar)(&generatedSalt[0])
+		saltLen = C.size_t(len(generatedSalt))
 	}
+	// 确保生成的盐值在返回时被清零
+	defer ZeroBytes(generatedSalt)
 
 	// 处理上下文信息
 	if len(config.KDFInfo) > 0 {
@@ -433,14 +467,19 @@ func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLev
 	return output, nil
 }
 
-// DeriveSharedSecretBasic DH密钥派生（基本模式）
+// DeriveSharedSecretBasic DH密钥派生（基本模式，返回原始共享秘密）
 //
-// 此函数执行DH密钥协商并返回共享秘密
+// Deprecated: 此函数返回未经 KDF 处理的原始共享秘密，直接使用存在安全风险
+// （NIST SP 800-56A Rev.3 Section 6 要求所有 DH 输出必须经过 KDF）。
+// 请使用 DeriveSharedSecret() 代替，该函数内置 HKDF 或 KDF_X9_63 处理。
 //
-// 安全特性：
-// - 使用EVP API进行密钥派生
-// - 自动处理不同类型的密钥（DH、ECDH）
-// - 符合NIST SP 800-56A基本要求
+// 此函数执行DH密钥协商，返回原始共享秘密，不经过KDF处理。
+// 通信双方调用此函数将得到相同的共享秘密。
+//
+// 安全警告：
+// - 原始共享秘密不建议直接用作会话密钥
+// - 推荐使用 DeriveSharedSecret() 并配置KDF参数
+// - 如需自行处理KDF，请确保双方使用相同的盐值和信息参数
 //
 // 符合标准：
 // - NIST SP 800-56A Rev.3 Section 5.7.1.1 (Basic Key Agreement)
@@ -454,7 +493,7 @@ func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLev
 //
 // 返回值：
 //
-//	共享秘密
+//	原始共享秘密（双方一致）
 //	error - 错误
 func DeriveSharedSecretBasic(private PrivateKey, public PublicKey) ([]byte, error) {
 	// 参数验证
@@ -500,11 +539,11 @@ func DeriveSharedSecretBasic(private PrivateKey, public PublicKey) ([]byte, erro
 	}
 	defer C.X_OPENSSL_free(buffer)
 
-	// 派生共享秘密
+	// 派生原始共享秘密
 	if C.X_EVP_PKEY_derive(dhCtx, (*C.uchar)(buffer), &buffLen) != 1 {
 		return nil, PopError()
 	}
 
-	secret := C.GoBytes(buffer, C.int(buffLen))
-	return secret, nil
+	// 返回原始共享秘密（不做KDF处理，保证双方一致）
+	return C.GoBytes(buffer, C.int(buffLen)), nil
 }

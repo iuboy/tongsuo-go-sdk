@@ -14,7 +14,7 @@
 
 package sha256
 
-// #include "../shim.h"
+// #include "shim.h"
 import "C"
 
 import (

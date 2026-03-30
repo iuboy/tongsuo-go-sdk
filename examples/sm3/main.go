@@ -16,7 +16,11 @@ import (
 
 func main() {
 	msg := "hello world"
-	fmt.Printf("SM3(%s)=%x\n", msg, sm3.Sum([]byte(msg)))
+	sum, err := sm3.Sum([]byte(msg))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("SM3(%s)=%x\n", msg, sum)
 
 	h, err := sm3.New()
 	if err != nil {

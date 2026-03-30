@@ -25,6 +25,7 @@ import (
 
 const (
 	GCMTagMaxLen = 16
+	maxInt32     = 1<<31 - 1 // C.int 最大值，用于防止 Go int → C int 截断
 )
 
 const (
@@ -124,14 +125,14 @@ func newCipherCtx() (*cipherCtx, error) {
 
 func (ctx *cipherCtx) SetKeyAndIV(key, iv []byte) error {
 	var kptr, iptr *C.uchar
-	if key != nil {
+	if key != nil && len(key) > 0 {
 		if len(key) != ctx.KeySize() {
 			return fmt.Errorf("bad key size (%d bytes instead of %d): %w",
 				len(key), ctx.KeySize(), ErrBadKeySize)
 		}
 		kptr = (*C.uchar)(&key[0])
 	}
-	if iv != nil {
+	if iv != nil && len(iv) > 0 {
 		if len(iv) != ctx.IVSize() {
 			return fmt.Errorf("bad IV size (%d bytes instead of %d): %w",
 				len(iv), ctx.IVSize(), ErrBadIvSize)
@@ -190,6 +191,9 @@ func (ctx *cipherCtx) SetCtrl(code, arg int) error {
 }
 
 func (ctx *cipherCtx) SetCtrlBytes(code, arg int, value []byte) error {
+	if len(value) == 0 {
+		return fmt.Errorf("cannot set ctrl bytes with empty value (code=%d, arg=%d)", code, arg)
+	}
 	res := C.EVP_CIPHER_CTX_ctrl(ctx.ctx, C.int(code), C.int(arg),
 		unsafe.Pointer(&value[0]))
 	if res != 1 {
@@ -310,10 +314,16 @@ func (ctx *encryptionCipherCtx) EncryptUpdate(input []byte) ([]byte, error) {
 	if len(input) == 0 {
 		return nil, nil
 	}
+	// H-07 修复：防止 Go int → C int 截断（数据 >2GB 时丢失高位）
+	if len(input) > maxInt32 {
+		return nil, fmt.Errorf("input too large for single update: %d bytes (maximum %d)", len(input), maxInt32)
+	}
 	outbuf := make([]byte, len(input)+ctx.BlockSize())
 	outlen := C.int(len(outbuf))
 	res := C.EVP_EncryptUpdate(ctx.ctx, (*C.uchar)(&outbuf[0]), &outlen,
 		(*C.uchar)(&input[0]), C.int(len(input)))
+	runtime.KeepAlive(input)
+	runtime.KeepAlive(outbuf)
 	if res != 1 {
 		return nil, fmt.Errorf("failed to encrypt [result %d]: %w", res, PopError())
 	}
@@ -324,10 +334,16 @@ func (ctx *decryptionCipherCtx) DecryptUpdate(input []byte) ([]byte, error) {
 	if len(input) == 0 {
 		return nil, nil
 	}
+	// H-07 修复：防止 Go int → C int 截断
+	if len(input) > maxInt32 {
+		return nil, fmt.Errorf("input too large for single update: %d bytes (maximum %d)", len(input), maxInt32)
+	}
 	outbuf := make([]byte, len(input)+ctx.BlockSize())
 	outlen := C.int(len(outbuf))
 	res := C.EVP_DecryptUpdate(ctx.ctx, (*C.uchar)(&outbuf[0]), &outlen,
 		(*C.uchar)(&input[0]), C.int(len(input)))
+	runtime.KeepAlive(input)
+	runtime.KeepAlive(outbuf)
 	if res != 1 {
 		return nil, fmt.Errorf("failed to decrypt [result %d]: %w", res, PopError())
 	}
@@ -340,16 +356,22 @@ func (ctx *encryptionCipherCtx) EncryptFinal() ([]byte, error) {
 	if C.EVP_EncryptFinal_ex(ctx.ctx, (*C.uchar)(&outbuf[0]), &outlen) != 1 {
 		return nil, fmt.Errorf("encryption failed: %w", PopError())
 	}
-	return outbuf[:outlen], nil
+	result := outbuf[:outlen]
+	runtime.KeepAlive(outbuf)
+	return result, nil
 }
 
 func (ctx *decryptionCipherCtx) DecryptFinal() ([]byte, error) {
 	outbuf := make([]byte, ctx.BlockSize())
 	var outlen C.int
 	if C.EVP_DecryptFinal_ex(ctx.ctx, (*C.uchar)(&outbuf[0]), &outlen) != 1 {
-		// this may mean the tag failed to verify- all previous plaintext
-		// returned must be considered faked and invalid
-		return nil, fmt.Errorf("decryption failed: %w", PopError())
+		// AEAD 认证失败或 CBC 填充错误。
+		// 不区分具体原因，防止攻击者利用错误消息进行 oracle 攻击。
+		// （NIST SP 800-38D Section 7.2: AEAD 解密失败不应泄露认证状态）
+		PopError() // 清空 OpenSSL 错误队列，防止上层通过 PopError 获取细节
+		return nil, ErrDecryptionFailed
 	}
-	return outbuf[:outlen], nil
+	result := outbuf[:outlen]
+	runtime.KeepAlive(outbuf)
+	return result, nil
 }

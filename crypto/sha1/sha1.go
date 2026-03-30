@@ -14,7 +14,7 @@
 
 package sha1
 
-// #include "../shim.h"
+// #include "shim.h"
 import "C"
 
 import (

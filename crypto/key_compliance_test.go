@@ -40,15 +40,20 @@ func TestRSAModernAPICompliance(t *testing.T) {
 			t.Errorf("expected RSA key type, got %v", key.KeyType())
 		}
 
-		// 验证密钥长度
+		// 验证密钥可以正常序列化和加载（EVP API 生成的密钥应支持 PKCS8）
 		pem, err := key.MarshalPKCS8PrivateKeyPEM()
 		if err != nil {
 			t.Fatalf("failed to marshal key: %v", err)
 		}
 
-		// 验证PEM包含RSA标识
-		if !contains(string(pem), "RSA") {
-			t.Error("expected PEM to contain RSA identifier")
+		loaded, err := LoadPrivateKeyFromPEM(pem)
+		if err != nil {
+			t.Fatalf("failed to load marshaled key: %v", err)
+		}
+		defer loaded.Wipe()
+
+		if loaded.KeyType() != KeyTypeRSA && loaded.KeyType() != KeyTypeRSA2 {
+			t.Errorf("loaded key type mismatch: got %v", loaded.KeyType())
 		}
 	})
 
