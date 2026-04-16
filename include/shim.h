@@ -162,6 +162,7 @@ extern BIGNUM *X_BN_new(void);
 extern void X_BN_free(BIGNUM *a);
 extern int X_BN_set_word(BIGNUM *a, unsigned long w);
 extern int X_BN_num_bytes(const BIGNUM *a);
+extern int X_BN_bn2bin(const BIGNUM *a, unsigned char *to);
 
 /* String and memory allocation helpers */
 extern char *X_CString(const char *str);
@@ -350,5 +351,28 @@ extern OCSP_BASICRESP *X_OCSP_response_get1_basic(OCSP_RESPONSE *r);
 extern PKCS8_PRIV_KEY_INFO *X_EVP_PKEY2PKCS8(EVP_PKEY *pkey);
 extern void X_PKCS8_PRIV_KEY_INFO_free(PKCS8_PRIV_KEY_INFO *p8);
 extern int X_i2d_PKCS8_PRIV_KEY_INFO_bio(BIO *bio, PKCS8_PRIV_KEY_INFO *p8);
+
+/* EC_KEY / ECDH helpers for SM2 key agreement */
+extern EC_KEY *X_EVP_PKEY_get1_EC_KEY(EVP_PKEY *pkey);
+extern void X_EC_KEY_free(EC_KEY *key);
+extern const EC_GROUP *X_EC_KEY_get0_group(const EC_KEY *key);
+extern const EC_POINT *X_EC_KEY_get0_public_key(const EC_KEY *key);
+extern int X_ECDH_compute_key(void *out, size_t outlen,
+                               const EC_POINT *pub_key, const EC_KEY *ecdh,
+                               void *(*KDF)(const void *in, size_t inlen,
+                                            void *out, size_t *outlen));
+
+/* PKI toolchain: CSR, CRL, certificate chain verification */
+extern int X_X509_REQ_sign_ctx(X509_REQ *req, EVP_MD_CTX *ctx);
+extern int X_X509_REQ_add1_ext(X509_REQ *req, int nid, const char *value);
+extern int X_X509_CRL_sign_ctx(X509_CRL *crl, EVP_MD_CTX *ctx);
+extern int X_X509_CRL_add0_revoked(X509_CRL *crl, X509_REVOKED *rev);
+extern int X_sk_X509_REVOKED_num(const STACK_OF(X509_REVOKED) *sk);
+extern X509_REVOKED *X_sk_X509_REVOKED_value(const STACK_OF(X509_REVOKED) *sk, int i);
+extern STACK_OF(X509) *X_sk_X509_new_null(void);
+extern int X_sk_X509_push(STACK_OF(X509) *sk, X509 *x);
+extern void X_sk_X509_free(STACK_OF(X509) *sk);
+extern STACK_OF(X509) *X_X509_STORE_CTX_get0_chain(const X509_STORE_CTX *ctx);
+extern void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) *sk);
 
 #endif /* TONGSUO_GO_SDK_CRYPTO_SHIM_H */

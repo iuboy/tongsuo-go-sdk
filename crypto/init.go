@@ -54,7 +54,9 @@ var (
 	ErrOCSPResponseCreate = errors.New("OCSP response create failed")
 	ErrOCSPResponseParse  = errors.New("OCSP response parse failed")
 	ErrOCSPStatusNotFound = errors.New("OCSP status not found for certificate")
-)
+	ErrNoCSR              = errors.New("no certificate signing request")
+	ErrNoCRL              = errors.New("no certificate revocation list")
+	)
 
 // 安全模式配置
 // 通过环境变量 TONGSUO_DETAILED_ERRORS=true 启用详细错误信息

@@ -21,3 +21,4 @@ crypto/test-runs/
 examples/cert_gen/
 .vscode/
 .idea/
+.claude/

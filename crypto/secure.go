@@ -111,11 +111,6 @@ func VerifyHexMAC(expectedHex string, actual []byte) error {
 		return fmt.Errorf("failed to decode expected MAC: %w", err)
 	}
 
-	// H-13 修复：不泄露长度差异信息
-	if len(expected) != len(actual) {
-		return fmt.Errorf("MAC verification failed")
-	}
-
 	if !ConstantTimeCompare(expected, actual) {
 		return fmt.Errorf("MAC verification failed")
 	}

@@ -143,6 +143,26 @@ const defaultCipherList = "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:!
 // defaultCipherSuites TLS 1.3 默认密码套件。
 const defaultCipherSuites = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256"
 
+// RFC 8998 TLS 1.3 SM 密码套件常量
+//
+// RFC 8998 定义了 TLS 1.3 使用国密算法 (SM2/SM3/SM4) 的密码套件。
+// Tongsuo 8.5+ 原生支持这些套件。
+const (
+	// SM4GCMCipherSuite TLS 1.3 SM4-GCM-SM3 密码套件 (RFC 8998)
+	// 使用 SM4-GCM 进行加密，SM3 作为哈希算法
+	SM4GCMCipherSuite = "TLS_SM4_GCM_SM3"
+
+	// SM4CCMCipherSuite TLS 1.3 SM4-CCM-SM3 密码套件 (RFC 8998)
+	// 使用 SM4-CCM 进行认证加密，SM3 作为哈希算法
+	SM4CCMCipherSuite = "TLS_SM4_CCM_SM3"
+
+	// SMCipherSuites RFC 8998 全部国密密码套件（冒号分隔）
+	SMCipherSuites = "TLS_SM4_GCM_SM3:TLS_SM4_CCM_SM3"
+)
+
+// SM2CurveID RFC 8998 定义的 SM2 曲线 ID (41)
+const SM2CurveID = 41
+
 // NewCtx creates a context that supports any TLS version 1.0 and newer.
 func NewCtx() (*Ctx, error) {
 	c, err := NewCtxWithVersion(AnyVersion)
@@ -155,6 +175,27 @@ func NewCtx() (*Ctx, error) {
 	return c, err
 }
 
+// NewTLS13SMCtx 创建配置为 TLS 1.3 + 国密 (RFC 8998) 的 SSL 上下文。
+//
+// 配置内容:
+//   - TLS 1.3 协议版本
+//   - SM 密码套件: TLS_SM4_GCM_SM3 + TLS_SM4_CCM_SM3
+//
+// TODO: 确认 Tongsuo 是否提供 SSL_CTX_set1_curves 或等价 API，
+// 显式设置 SM2 曲线 (curve ID 41) 到 supported_groups 扩展中。
+// 当前依赖密码套件自动协商曲线，某些场景可能回退到 P-256。
+//
+// 调用方需要额外加载 SM2 证书和私钥 (UseCertificate + UsePrivateKey)。
+func NewTLS13SMCtx() (*Ctx, error) {
+	ctx, err := NewCtxWithVersion(TLSv1_3)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.SetCipherSuites(SMCipherSuites); err != nil {
+		return nil, fmt.Errorf("failed to set SM cipher suites: %w", err)
+	}
+	return ctx, nil
+}
 // NewCtxFromFiles calls NewCtx, loads the provided files, and configures the
 // context to use them.
 func NewCtxFromFiles(certFile string, keyFile string) (*Ctx, error) {

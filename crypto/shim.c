@@ -1005,11 +1005,12 @@ int X_SSL_CTX_set_session_cache_mode(SSL_CTX *ctx, long mode)
 
 int X_SSL_CTX_enable_ntls(SSL_CTX *ctx)
 {
-#ifdef SSL_CTX_enable_ntls
-	return SSL_CTX_enable_ntls(ctx);
-#else
-	return 1; // Success if not supported
+#ifdef TONGSUO_VERSION_TEXT
+	// Tongsuo exports SSL_CTX_enable_ntls as a function (not a macro),
+	// so #ifdef SSL_CTX_enable_ntls fails. Use Tongsuo version check instead.
+	SSL_CTX_enable_ntls(ctx);
 #endif
+	return 1;
 }
 
 int X_SSL_CTX_set_tmp_dh(SSL_CTX *ctx, DH *dh)
@@ -1178,4 +1179,122 @@ void X_PKCS8_PRIV_KEY_INFO_free(PKCS8_PRIV_KEY_INFO *p8)
 int X_i2d_PKCS8_PRIV_KEY_INFO_bio(BIO *bio, PKCS8_PRIV_KEY_INFO *p8)
 {
 	return i2d_PKCS8_PRIV_KEY_INFO_bio(bio, p8);
+}
+
+// ============================================================================
+// EC_KEY / ECDH helpers for SM2 key agreement
+// ============================================================================
+
+EC_KEY *X_EVP_PKEY_get1_EC_KEY(EVP_PKEY *pkey)
+{
+	return EVP_PKEY_get1_EC_KEY(pkey);
+}
+
+void X_EC_KEY_free(EC_KEY *key)
+{
+	EC_KEY_free(key);
+}
+
+const EC_GROUP *X_EC_KEY_get0_group(const EC_KEY *key)
+{
+	return EC_KEY_get0_group(key);
+}
+
+const EC_POINT *X_EC_KEY_get0_public_key(const EC_KEY *key)
+{
+	return EC_KEY_get0_public_key(key);
+}
+
+int X_ECDH_compute_key(void *out, size_t outlen,
+                        const EC_POINT *pub_key, const EC_KEY *ecdh,
+                        void *(*KDF)(const void *in, size_t inlen,
+                                     void *out, size_t *outlen))
+{
+	return ECDH_compute_key(out, outlen, pub_key, ecdh, KDF);
+}
+
+/* ============================================================
+ * PKI toolchain: CSR, CRL, certificate chain verification
+ * ============================================================ */
+
+/* CSR signing with EVP_MD_CTX (needed for SM2) */
+int X_X509_REQ_sign_ctx(X509_REQ *req, EVP_MD_CTX *ctx)
+{
+	return X509_REQ_sign_ctx(req, ctx);
+}
+
+/* CRL signing with EVP_MD_CTX (needed for SM2) */
+int X_X509_CRL_sign_ctx(X509_CRL *crl, EVP_MD_CTX *ctx)
+{
+	return X509_CRL_sign_ctx(crl, ctx);
+}
+
+/* CSR extension helper: add a single extension by NID */
+int X_X509_REQ_add1_ext(X509_REQ *req, int nid, const char *value)
+{
+	X509V3_CTX ctx;
+	X509V3_set_ctx(&ctx, NULL, NULL, req, NULL, 0);
+	X509_EXTENSION *ext = X509V3_EXT_conf_nid(NULL, &ctx, nid, (char *)value);
+	if (!ext)
+		return 0;
+
+	STACK_OF(X509_EXTENSION) *exts = sk_X509_EXTENSION_new_null();
+	if (!exts) {
+		X509_EXTENSION_free(ext);
+		return 0;
+	}
+	sk_X509_EXTENSION_push(exts, ext);
+	int ret = X509_REQ_add_extensions(req, exts);
+	sk_X509_EXTENSION_pop_free(exts, X509_EXTENSION_free);
+	return ret;
+}
+
+/* CRL helpers */
+int X_X509_CRL_add0_revoked(X509_CRL *crl, X509_REVOKED *rev)
+{
+	return X509_CRL_add0_revoked(crl, rev);
+}
+
+/* CRL revoked entry stack accessors */
+int X_sk_X509_REVOKED_num(const STACK_OF(X509_REVOKED) *sk)
+{
+	return sk_X509_REVOKED_num(sk);
+}
+
+X509_REVOKED *X_sk_X509_REVOKED_value(const STACK_OF(X509_REVOKED) *sk, int i)
+{
+	return sk_X509_REVOKED_value(sk, i);
+}
+
+/* X509 stack helpers for chain verification */
+STACK_OF(X509) *X_sk_X509_new_null(void)
+{
+	return sk_X509_new_null();
+}
+
+int X_sk_X509_push(STACK_OF(X509) *sk, X509 *x)
+{
+	return sk_X509_push(sk, x);
+}
+
+void X_sk_X509_free(STACK_OF(X509) *sk)
+{
+	sk_X509_free(sk);
+}
+
+/* Certificate chain verification helpers */
+STACK_OF(X509) *X_X509_STORE_CTX_get0_chain(const X509_STORE_CTX *ctx)
+{
+	return X509_STORE_CTX_get0_chain(ctx);
+}
+
+void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) *sk)
+{
+	X509_STORE_CTX_set0_untrusted(ctx, sk);
+}
+
+/* BN helpers (BN_num_bytes is a macro, not visible to CGo) */
+int X_BN_bn2bin(const BIGNUM *a, unsigned char *to)
+{
+	return BN_bn2bin(a, to);
 }

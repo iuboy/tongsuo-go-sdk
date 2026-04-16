@@ -19,6 +19,8 @@ import "C"
 import (
 	"crypto/rand"
 	"fmt"
+	"runtime"
+	"unsafe"
 )
 
 // DHSecurityLevel 定义DH密钥交换的安全级别
@@ -225,41 +227,9 @@ func DeriveSharedSecretWithSecurityLevel(
 			securityLevel)
 	}
 
-	// 创建密钥派生上下文
-	dhCtx := C.X_EVP_PKEY_CTX_new(private.EvpPKey(), nil)
-	if dhCtx == nil {
-		return nil, PopError()
-	}
-	defer C.X_EVP_PKEY_CTX_free(dhCtx)
-
-	// 初始化密钥派生
-	if C.X_EVP_PKEY_derive_init(dhCtx) != 1 {
-		return nil, PopError()
-	}
-
 	// ========== 公钥验证（符合 NIST SP 800-56A Rev.3） ==========
-	//
-	// 安全威胁：
-	// 1. 小subgroup攻击：攻击者提供小阶元素，导致密钥泄露
-	// 2. 无效曲线攻击：提供不在曲线上的点
-	// 3. 扭曲攻击：提供格式错误的公钥
-	//
-	// 防护措施：
-	// 1. 公钥范围验证
-	// 2. 点在曲线上验证
-	// 3. 共因子检查
-	//
-	// 参考：
-	// - NIST SP 800-56A Rev.3 Section 5.6.2.1
-	// - NIST SP 800-56A Rev.3 Section 5.6.2.3
-	// - RFC 7748 (Curve25519/448)
 
 	if securityLevel >= DHSecurityLevelBasic {
-		// 验证对方公钥的有效性
-		// EVP_PKEY_public_check 执行：
-		// - RSA: 密钥参数检查
-		// - DH: 公钥范围检查 (2 <= y <= p-2)
-		// - EC: 点在曲线上检查
 		if C.X_EVP_PKEY_public_check(public.EvpPKey()) != 1 {
 			result.ValidationErrors = append(result.ValidationErrors,
 				fmt.Errorf("peer public key validation failed: %w", PopError()))
@@ -269,40 +239,76 @@ func DeriveSharedSecretWithSecurityLevel(
 	}
 
 	if securityLevel >= DHSecurityLevelStandard {
-		// 额外的验证：检查本地密钥对一致性
-		// EVP_PKEY_pairwise_check 验证私钥与对应公钥的一致性
-		// 注意：此检查针对本地密钥对，而非对方公钥
-		// 对方公钥的验证已通过上面的 public_check 完成
-		// 符合 NIST SP 800-56A Rev.3 Section 6.1.6
 		if C.X_EVP_PKEY_pairwise_check(private.EvpPKey()) != 1 {
 			result.ValidationErrors = append(result.ValidationErrors,
 				fmt.Errorf("local key pair consistency check failed: %w", PopError()))
-			// 本地密钥对不一致是严重错误，应中止
 			return nil, fmt.Errorf("local key pair consistency check failed: %w", PopError())
 		}
 	}
 
-	if securityLevel >= DHSecurityLevelHigh {
-		// 高级验证：检查特定算法的额外约束
-		// 例如：SM2曲线的特殊检查
-		if public.KeyType() == KeyTypeSM2 || public.BaseType() == KeyTypeSM2 {
-			// SM2特定验证可以在这里添加
-			// 例如：检查 cofactor
+	// ========== 密钥协商 ==========
+	//
+	// SM2 密钥不支持 EVP_PKEY_derive（Tongsuo 未注册 SM2 derive 方法），
+	// 使用低级 ECDH_compute_key 作为 SM2 的替代路径。
+
+	var rawSecret []byte
+
+	if public.KeyType() == KeyTypeSM2 || public.BaseType() == KeyTypeSM2 {
+		// SM2 ECDH 路径: ECDH_compute_key
+		secret, err := deriveSM2ECDH(private, public)
+		if err != nil {
+			return nil, fmt.Errorf("SM2 ECDH failed: %w", err)
+		}
+		rawSecret = secret
+	} else {
+		// 标准 ECDH 路径: EVP_PKEY_derive
+		var deriveErr error
+		rawSecret, deriveErr = deriveECDH(private, public)
+		if deriveErr != nil {
+			return nil, deriveErr
 		}
 	}
+	defer ZeroBytes(rawSecret)
 
-	// 设置对方公钥
+	// ========== 密钥派生（符合 NIST SP 800-56C） ==========
+
+	if kdfConfig.UseKDF {
+		finalSecret, err := applyKDF(rawSecret, kdfConfig, securityLevel)
+		if err != nil {
+			return nil, fmt.Errorf("KDF failed: %w", err)
+		}
+		result.SharedSecret = finalSecret
+	} else {
+		result.SharedSecret = rawSecret
+	}
+
+	return result, nil
+}
+
+// deriveECDH 使用 EVP_PKEY_derive 进行标准 ECDH 密钥协商
+func deriveECDH(private PrivateKey, public PublicKey) ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	dhCtx := C.X_EVP_PKEY_CTX_new(private.EvpPKey(), nil)
+	if dhCtx == nil {
+		return nil, PopError()
+	}
+	defer C.X_EVP_PKEY_CTX_free(dhCtx)
+
+	if C.X_EVP_PKEY_derive_init(dhCtx) != 1 {
+		return nil, PopError()
+	}
+
 	if C.X_EVP_PKEY_derive_set_peer(dhCtx, public.EvpPKey()) != 1 {
 		return nil, PopError()
 	}
 
-	// 确定共享秘密长度
 	var buffLen C.size_t
 	if C.X_EVP_PKEY_derive(dhCtx, nil, &buffLen) != 1 {
 		return nil, PopError()
 	}
 
-	// 分配缓冲区
 	buffer := C.X_OPENSSL_malloc(buffLen)
 	if buffer == nil {
 		return nil, ErrMallocFailure
@@ -312,51 +318,71 @@ func DeriveSharedSecretWithSecurityLevel(
 		C.X_OPENSSL_free(buffer)
 	}()
 
-	// 派生共享秘密
-	//
-	// 注意：这个共享秘密是原始密钥材料
-	// 应该通过KDF处理后再使用
 	if C.X_EVP_PKEY_derive(dhCtx, (*C.uchar)(buffer), &buffLen) != 1 {
 		return nil, PopError()
 	}
 
-	// 获取原始共享秘密
-	rawSecret := C.GoBytes(buffer, C.int(buffLen))
+	return C.GoBytes(buffer, C.int(buffLen)), nil
+}
 
-	// ========== 密钥派生（符合 NIST SP 800-56C） ==========
-	//
-	// 如果启用KDF，处理原始共享秘密
-	// KDF提供：
-	// 1. 密钥分离：防止密钥重用
-	// 2. 密钥扩展：从短密钥生成长密钥
-	// 3. 上下文绑定：将密钥绑定到特定用途
-	//
-	// 参考：
-	// - NIST SP 800-56C (Recommendation for Key Derivation)
-	// - NIST SP 800-108 (KDF in Counter Mode)
-	// - RFC 5869 (HKDF)
-	// - GB/T 37092-2018 (国密KDF)
+// deriveSM2ECDH 使用 ECDH_compute_key 进行 SM2 ECDH 密钥协商
+//
+// Tongsuo 的 EVP_PKEY_derive 不支持 SM2 密钥，因为 SM2 的 EVP 实现没有注册 derive 方法。
+// 使用低级 ECDH_compute_key 函数直接操作 EC_KEY/EC_POINT 来计算共享秘密。
+//
+// SM2 基于 sm2p256v1 曲线，ECDH 计算与标准 EC ECDH 一致：
+//
+//	shared_secret = d_A * P_B = d_B * P_A (其中 d 是私钥标量，P 是公钥点)
+//
+// 注意: GM/T 0003.3 定义了完整的 SM2 密钥交换协议（包含临时密钥对和多轮交换），
+// 这里实现的是基础 ECDH，适用于 TLS 握手等标准 ECDH 场景。
+func deriveSM2ECDH(private PrivateKey, public PublicKey) ([]byte, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
-	var finalSecret []byte
-	var err error
+	// 从 EVP_PKEY 提取 EC_KEY
+	ecPriv := C.X_EVP_PKEY_get1_EC_KEY(private.EvpPKey())
+	if ecPriv == nil {
+		return nil, fmt.Errorf("failed to get EC_KEY from SM2 private key: %w", PopError())
+	}
+	defer C.X_EC_KEY_free(ecPriv)
 
-	if kdfConfig.UseKDF {
-		// 使用KDF派生最终密钥
-		finalSecret, err = applyKDF(rawSecret, kdfConfig, securityLevel)
-		if err != nil {
-			return nil, fmt.Errorf("KDF failed: %w", err)
-		}
+	ecPub := C.X_EVP_PKEY_get1_EC_KEY(public.EvpPKey())
+	if ecPub == nil {
+		return nil, fmt.Errorf("failed to get EC_KEY from SM2 public key: %w", PopError())
+	}
+	defer C.X_EC_KEY_free(ecPub)
 
-		// 安全清零原始共享秘密
-		ZeroBytes(rawSecret)
-
-		result.SharedSecret = finalSecret
-	} else {
-		// 直接使用原始共享秘密（此路径在KDF强制模式下不可达）
-		result.SharedSecret = rawSecret
+	// 获取对方公钥点
+	peerPoint := C.X_EC_KEY_get0_public_key(ecPub)
+	if peerPoint == nil {
+		return nil, fmt.Errorf("failed to get public key point: %w", PopError())
 	}
 
-	return result, nil
+	// 获取曲线组以确定共享秘密长度（SM2 是 256 位曲线 = 32 字节）
+	group := C.X_EC_KEY_get0_group(ecPriv)
+	if group == nil {
+		return nil, fmt.Errorf("failed to get EC group")
+	}
+
+	// ECDH_compute_key 输出长度为曲线字段大小的字节数 (SM2 = 32)
+	// 分配足够大的缓冲区
+	outLen := C.size_t(32)
+	outBuf := make([]byte, outLen)
+
+	// 计算 ECDH 共享秘密 (不使用 KDF，返回原始 x 坐标)
+	ret := C.X_ECDH_compute_key(
+		unsafe.Pointer(&outBuf[0]),
+		outLen,
+		peerPoint,
+		ecPriv,
+		nil, // 不使用额外 KDF，返回原始共享秘密
+	)
+	if ret <= 0 {
+		return nil, fmt.Errorf("ECDH_compute_key failed: %w", PopError())
+	}
+
+	return outBuf[:ret], nil
 }
 
 // applyKDF 应用密钥派生函数

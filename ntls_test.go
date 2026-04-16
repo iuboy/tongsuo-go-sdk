@@ -709,7 +709,7 @@ func newNTLSServerWithSNI(t *testing.T, testDir string, certKeyPairs map[string]
 
 // Load certificate and key for SSL.
 func loadCertAndKeyForSSL(ssl *ts.SSL, certKeyPair crypto.GMDoubleCertKey) error {
-	ctx, err := ts.NewCtx()
+	ctx, err := ts.NewCtxWithVersion(ts.NTLS)
 	if err != nil {
 		return fmt.Errorf("failed to create ctx: %w", err)
 	}
