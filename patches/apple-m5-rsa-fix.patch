@@ -1,0 +1,70 @@
+From 8ed8682a0ab2c885baff1c4bbc88e396b68e2bb4 Mon Sep 17 00:00:00 2001
+From: ycq <ycq@iamm.app>
+Date: Thu, 26 Mar 2026 17:58:09 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=B7=BB=E5=8A=A0Apple=20M5=E8=8A=AF=E7=89=87?=
+ =?UTF-8?q?=E8=AF=86=E5=88=AB=EF=BC=8C=E4=BF=AE=E5=A4=8DRSA=E5=AF=86?=
+ =?UTF-8?q?=E9=92=A5=E7=94=9F=E6=88=90=E5=B4=A9=E6=BA=83?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ crypto/arm_arch.h |  9 +++++++++
+ crypto/armcap.c   | 14 ++++++++++++--
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/crypto/arm_arch.h b/crypto/arm_arch.h
+index acd8aee4d..b80afafff 100644
+--- a/crypto/arm_arch.h
++++ b/crypto/arm_arch.h
+@@ -125,6 +125,15 @@ extern unsigned int OPENSSL_armv8_rsa_neonized;
+ # define APPLE_CPU_PART_M2_AVALANCHE_PRO    0x035
+ # define APPLE_CPU_PART_M2_BLIZZARD_MAX     0x038
+ # define APPLE_CPU_PART_M2_AVALANCHE_MAX    0x039
++# define APPLE_CPU_PART_M3_CORE             0x042
++# define APPLE_CPU_PART_M3_CORE_PRO         0x043
++# define APPLE_CPU_PART_M3_CORE_MAX         0x048
++# define APPLE_CPU_PART_M4_CORE             0x052
++# define APPLE_CPU_PART_M4_CORE_PRO         0x053
++# define APPLE_CPU_PART_M4_CORE_MAX         0x058
++# define APPLE_CPU_PART_M5_CORE             0x062
++# define APPLE_CPU_PART_M5_CORE_PRO         0x063
++# define APPLE_CPU_PART_M5_CORE_MAX         0x068
+ 
+ # define MICROSOFT_CPU_PART_COBALT_100      0xD49
+ 
+diff --git a/crypto/armcap.c b/crypto/armcap.c
+index 66c900108..43ba5f707 100644
+--- a/crypto/armcap.c
++++ b/crypto/armcap.c
+@@ -301,7 +301,8 @@ void OPENSSL_cpuid_setup(void)
+                ((strncmp(uarch, "Apple M1", 8) == 0) ||
+                 (strncmp(uarch, "Apple M2", 8) == 0) ||
+                 (strncmp(uarch, "Apple M3", 8) == 0) ||
+-                (strncmp(uarch, "Apple M4", 8) == 0))) {
++                (strncmp(uarch, "Apple M4", 8) == 0) ||
++                (strncmp(uarch, "Apple M5", 8) == 0))) {
+                 OPENSSL_armcap_P |= ARMV8_UNROLL8_EOR3;
+                 OPENSSL_armcap_P |= ARMV8_HAVE_SHA3_AND_WORTH_USING;
+             }
+@@ -441,7 +442,16 @@ void OPENSSL_cpuid_setup(void)
+          MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M2_AVALANCHE_PRO) ||
+          MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M2_BLIZZARD_PRO)  ||
+          MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M2_AVALANCHE_MAX) ||
+-         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M2_BLIZZARD_MAX)) &&
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M2_BLIZZARD_MAX) ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M3_CORE)         ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M3_CORE_PRO)     ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M3_CORE_MAX)     ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M4_CORE)         ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M4_CORE_PRO)     ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M4_CORE_MAX)     ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M5_CORE)         ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M5_CORE_PRO)     ||
++         MIDR_IS_CPU_MODEL(OPENSSL_arm_midr, ARM_CPU_IMP_APPLE, APPLE_CPU_PART_M5_CORE_MAX)) &&
+         (OPENSSL_armcap_P & ARMV8_SHA3))
+         OPENSSL_armcap_P |= ARMV8_HAVE_SHA3_AND_WORTH_USING;
+ # endif
+-- 
+2.53.0
+

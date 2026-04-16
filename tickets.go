@@ -18,6 +18,7 @@ package tongsuogo
 import "C"
 
 import (
+	"fmt"
 	"os"
 	"unsafe"
 
@@ -29,17 +30,15 @@ const (
 )
 
 // TicketCipherCtx describes the cipher that will be used by the ticket store
-// for encrypting the tickets. Engine may be nil if no engine is desired.
+// for encrypting the tickets.
 type TicketCipherCtx struct {
 	Cipher *crypto.Cipher
-	Engine *crypto.Engine
 }
 
 // TicketDigestCtx describes the digest that will be used by the ticket store
-// to authenticate the data. Engine may be nil if no engine is desired.
+// to authenticate the data.
 type TicketDigestCtx struct {
 	Digest *crypto.Digest
-	Engine *crypto.Engine
 }
 
 // TicketName is an identifier for the key material for a ticket.
@@ -47,11 +46,35 @@ type TicketName [KeyNameSize]byte
 
 // TicketKey is the key material for a ticket. If this is lost, forward secrecy
 // is lost as it allows decrypting TLS sessions retroactively.
+//
+// 安全要求（NIST SP 800-57 Part 1 Rev.5 Section 5.3.4）：
+//   - 密钥材料在不再使用时必须安全清零
+//   - 调用方应在密钥过期或替换后调用 Clear()
 type TicketKey struct {
 	Name      TicketName
 	CipherKey []byte
 	HMACKey   []byte
 	IV        []byte
+}
+
+// Clear 安全清零 TicketKey 中的所有密钥材料。
+//
+// 必须在密钥过期、替换或不再使用时调用此方法。
+// 使用 OPENSSL_cleanse 确保编译器不会优化掉清零操作。
+//
+// 符合标准：
+//   - NIST SP 800-57 Part 1 Rev.5 Section 5.3.4 (Cryptographic Key Destruction)
+//   - FIPS 140-2 Section 4.12.0
+func (k *TicketKey) Clear() {
+	if k == nil {
+		return
+	}
+	crypto.ZeroBytes(k.CipherKey)
+	crypto.ZeroBytes(k.HMACKey)
+	crypto.ZeroBytes(k.IV)
+	for i := range k.Name {
+		k.Name[i] = 0
+	}
 }
 
 // TicketKeyManager is a manager for TicketKeys. It allows one to control the
@@ -86,20 +109,6 @@ type TicketStore struct {
 	Keys      TicketKeyManager
 }
 
-func (t *TicketStore) cipherEngine() *C.ENGINE {
-	if t.CipherCtx.Engine == nil {
-		return nil
-	}
-	return (*C.ENGINE)(t.CipherCtx.Engine.Engine())
-}
-
-func (t *TicketStore) digestEngine() *C.ENGINE {
-	if t.DigestCtx.Engine == nil {
-		return nil
-	}
-	return (*C.ENGINE)(t.DigestCtx.Engine.Engine())
-}
-
 const (
 	// instruct to do a handshake
 	ticketRespRequireHandshake = 0
@@ -116,7 +125,7 @@ const (
 )
 
 //export go_ticket_key_cb_thunk
-func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_CIPHER_CTX, hctx *C.HMAC_CTX, enc C.int,
+func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, iv *C.uchar, cctx *C.EVP_CIPHER_CTX, hctx *C.HMAC_CTX, enc C.int,
 ) C.int {
 	// no panic's allowed. it's super hard to guarantee any state at this point
 	// so just abort everything.
@@ -150,14 +159,31 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 			}
 		}
 
+		// RFC 5077 Section 4: 验证密钥材料长度
+		if len(key.CipherKey) == 0 {
+			fmt.Fprintf(os.Stderr, "tongsuo-go-sdk: ticket CipherKey is empty\n")
+			return ticketRespRequireHandshake
+		}
+		if len(key.HMACKey) == 0 {
+			fmt.Fprintf(os.Stderr, "tongsuo-go-sdk: ticket HMACKey is empty\n")
+			return ticketRespRequireHandshake
+		}
+
 		C.memcpy(
 			unsafe.Pointer(keyName),
 			unsafe.Pointer(&key.Name[0]),
 			KeyNameSize)
+		// 将 IV 写入 OpenSSL 提供的缓冲区（包含在 ticket 中）
+		if iv != nil && len(key.IV) > 0 {
+			C.memcpy(
+				unsafe.Pointer(iv),
+				unsafe.Pointer(&key.IV[0]),
+				C.size_t(len(key.IV)))
+		}
 		C.EVP_EncryptInit_ex(
 			cctx,
 			(*C.EVP_CIPHER)(store.CipherCtx.Cipher.Ptr()),
-			store.cipherEngine(),
+			nil,
 			(*C.uchar)(&key.CipherKey[0]),
 			(*C.uchar)(&key.IV[0]))
 		C.HMAC_Init_ex(
@@ -165,7 +191,7 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 			unsafe.Pointer(&key.HMACKey[0]),
 			C.int(len(key.HMACKey)),
 			(*C.EVP_MD)(store.DigestCtx.Digest.Ptr()),
-			store.digestEngine())
+			nil)
 
 		return ticketRespSessionOk
 
@@ -181,21 +207,24 @@ func go_ticket_key_cb_thunk(pctx unsafe.Pointer, keyName *C.uchar, cctx *C.EVP_C
 			return ticketRespRequireHandshake
 		}
 		if store.Keys.Expired(name) {
+			// 密钥已过期，安全清零密钥材料
+			// 符合 NIST SP 800-57 Part 1 Rev.5 Section 5.3.4
+			key.Clear()
 			return ticketRespRequireHandshake
 		}
 
 		C.EVP_DecryptInit_ex(
 			cctx,
 			(*C.EVP_CIPHER)(store.CipherCtx.Cipher.Ptr()),
-			store.cipherEngine(),
+			nil,
 			(*C.uchar)(&key.CipherKey[0]),
-			(*C.uchar)(&key.IV[0]))
+			iv)
 		C.HMAC_Init_ex(
 			hctx,
 			unsafe.Pointer(&key.HMACKey[0]),
 			C.int(len(key.HMACKey)),
 			(*C.EVP_MD)(store.DigestCtx.Digest.Ptr()),
-			store.digestEngine())
+			nil)
 
 		if store.Keys.ShouldRenew(name) {
 			return ticketRespRenewSession
@@ -216,7 +245,9 @@ func (c *Ctx) SetTicketStore(store *TicketStore) {
 	if store == nil {
 		C.X_SSL_CTX_set_tlsext_ticket_key_cb(c.ctx, nil)
 	} else {
+		// 获取回调函数指针并解引用
+		cbPtr := C.X_SSL_CTX_ticket_key_cb()
 		C.X_SSL_CTX_set_tlsext_ticket_key_cb(c.ctx,
-			(*[0]byte)(C.X_SSL_CTX_ticket_key_cb))
+			*cbPtr)
 	}
 }

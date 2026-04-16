@@ -18,6 +18,7 @@ package crypto
 import "C"
 
 import (
+	"crypto/x509"
 	"fmt"
 	"io"
 	"math/big"
@@ -141,6 +142,9 @@ func (n *Name) GetEntry(nid NID) (string, bool) {
 		return "", false
 	}
 	buf := (*C.char)(C.malloc(C.size_t(entrylen + 1)))
+	if buf == nil {
+		return "", false
+	}
 	defer C.free(unsafe.Pointer(buf))
 	C.X509_NAME_get_text_by_NID(n.name, C.int(nid), buf, entrylen+1)
 	return C.GoStringN(buf, entrylen), true
@@ -149,7 +153,11 @@ func (n *Name) GetEntry(nid NID) (string, bool) {
 // NewCertificate generates a basic certificate based
 // on the provided CertificateInfo struct
 func NewCertificate(info *CertificateInfo, key PublicKey) (*Certificate, error) {
-	cert := &Certificate{x: C.X509_new()}
+	x := C.X509_new()
+	if x == nil {
+		return nil, ErrMallocFailure
+	}
+	cert := &Certificate{x: x}
 	runtime.SetFinalizer(cert, func(c *Certificate) {
 		C.X509_free(c.x)
 	})
@@ -239,14 +247,54 @@ func (c *Certificate) SetIssuerName(name *Name) error {
 }
 
 // SetSerial sets the serial of a certificate.
+//
+// 符合 RFC 5280 Section 4.1.2.2 要求：
+// - 序列号必须为正整数
+// - 序列号编码不超过 20 字节（160 位）
+//
+// 安全特性：
+// - 使用固定 20 字节编码，防止通过 DER 编码长度泄露序列号量级信息
+// - 符合 CA/Browser Forum Baseline Requirements Section 7.1：
+//   至少 64 位熵，不超过 159 位
 func (c *Certificate) SetSerial(serial *big.Int) error {
+	if serial == nil {
+		return fmt.Errorf("serial number cannot be nil")
+	}
+	if serial.Sign() <= 0 {
+		return fmt.Errorf("serial number must be a positive integer per RFC 5280 Section 4.1.2.2")
+	}
+
+	serialBytes := serial.Bytes()
+
+	// RFC 5280 Section 4.1.2.2: serial number encoding MUST NOT exceed 20 octets
+	// big.Int.Bytes() 去除前导零，但高位为 1 时 ASN.1 需要额外 0x00 前缀字节
+	asn1Len := len(serialBytes)
+	if serialBytes[0]&0x80 != 0 {
+		asn1Len++ // ASN.1 正整数需要额外前导 0x00 字节
+	}
+	if asn1Len > 20 {
+		return fmt.Errorf("serial number too long: ASN.1 encoding is %d bytes, RFC 5280 limits to 20", asn1Len)
+	}
+
+	// 固定长度编码：始终填充至 20 字节
+	// 防止通过 DER 编码长度泄露序列号量级信息（信息泄露侧信道）
+	//
+	// 攻击场景：变长编码下，1 字节序列号与 20 字节序列号在 DER 中长度不同，
+	// 攻击者可通过观察证书 DER 编码推断序列号范围。
+	// 固定长度编码消除了这一侧信道。
+	//
+	// 填充后最高字节为 0x00（除非恰好 20 字节），ASN.1 不需要额外正号前缀。
+	// 符合 CA/Browser Forum Baseline Requirements Section 7.1 推荐实践。
+	const serialFixedLen = 20
+	fixedBytes := make([]byte, serialFixedLen)
+	copy(fixedBytes[serialFixedLen-len(serialBytes):], serialBytes)
+
 	sno := C.ASN1_INTEGER_new()
 	defer C.ASN1_INTEGER_free(sno)
 	bn := C.BN_new()
 	defer C.BN_free(bn)
 
-	serialBytes := serial.Bytes()
-	if bn = C.BN_bin2bn((*C.uchar)(unsafe.Pointer(&serialBytes[0])), C.int(len(serialBytes)), bn); bn == nil {
+	if bn = C.BN_bin2bn((*C.uchar)(unsafe.Pointer(&fixedBytes[0])), C.int(serialFixedLen), bn); bn == nil {
 		return fmt.Errorf("failed to set serial: %w", PopError())
 	}
 	if sno = C.BN_to_ASN1_INTEGER(bn, sno); sno == nil {
@@ -303,6 +351,50 @@ func (c *Certificate) Sign(privKey PrivateKey, digest DigestAlgo) error {
 
 func (c *Certificate) insecureSign(privKey PrivateKey, digest DigestAlgo) error {
 	var md *C.EVP_MD = getDigestFunction(digest)
+
+	// Tongsuo 8.5: SM2 证书签名需要符合 GM/T 0009-2012 标准
+	// SM2 签名必须使用 SM3 摘要对用户 ID 和消息进行预处理
+	if privKey.KeyType() == KeyTypeSM2 {
+		// 创建 MD_CTX 用于签名
+		ctx := C.X_EVP_MD_CTX_new()
+		if ctx == nil {
+			return fmt.Errorf("failed to create MD_CTX: %w", PopError())
+		}
+		defer C.X_EVP_MD_CTX_free(ctx)
+
+		var pctx *C.EVP_PKEY_CTX
+
+		// 初始化签名上下文
+		if C.X_EVP_DigestSignInit(ctx, &pctx, md, nil, privKey.EvpPKey()) <= 0 {
+			return fmt.Errorf("failed to init sign: %w", PopError())
+		}
+
+		// 根据 GM/T 0009-2012，SM2 签名需要设置用户 ID
+		// 默认值：1234567812345678（16 字节 ASCII 字符串，非 hex 编码）
+		// 证书签名使用标准默认 ID
+		//
+	// 使用与密钥签名相同的 ParseSM2ID 函数，确保 ID 处理逻辑一致
+		sm2DefaultIDBytes, idErr := ParseSM2ID("1234567812345678", false)
+		if idErr != nil {
+			return fmt.Errorf("failed to parse default SM2 ID: %w", idErr)
+		}
+		sm2IDPtr := C.CBytes(sm2DefaultIDBytes)
+		defer C.X_free(sm2IDPtr)
+		defer runtime.KeepAlive(sm2DefaultIDBytes)
+
+		if C.X_EVP_PKEY_CTX_set1_id(pctx, sm2IDPtr, C.int(len(sm2DefaultIDBytes))) <= 0 {
+			return fmt.Errorf("failed to set SM2 ID: %w", PopError())
+		}
+
+		// 使用 X509_sign_ctx 进行签名
+		if C.X509_sign_ctx(c.x, ctx) <= 0 {
+			return fmt.Errorf("failed to sign certificate: %w", PopError())
+		}
+
+		return nil
+	}
+
+	// 非 SM2 证书使用原来的方法
 	if C.X509_sign(c.x, privKey.EvpPKey(), md) <= 0 {
 		return fmt.Errorf("failed to sign certificate: %w", PopError())
 	}
@@ -377,6 +469,27 @@ func (c *Certificate) AddExtensions(extensions map[NID]string) error {
 		}
 	}
 	return nil
+}
+
+// LoadCertificateFromDER loads an X509 certificate from DER-encoded bytes.
+func LoadCertificateFromDER(derBytes []byte) (*Certificate, error) {
+	if len(derBytes) == 0 {
+		return nil, ErrNoCert
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// d2i_X509 会修改输入指针，需要用副本
+	buf := (*C.uchar)(unsafe.Pointer(&derBytes[0]))
+	cert := C.d2i_X509(nil, &buf, C.long(len(derBytes)))
+	if cert == nil {
+		return nil, PopError()
+	}
+	x := &Certificate{x: cert}
+	runtime.SetFinalizer(x, func(x *Certificate) {
+		C.X509_free(x.x)
+	})
+	return x, nil
 }
 
 // LoadCertificateFromPEM loads an X509 certificate from a PEM-encoded block.
@@ -488,6 +601,80 @@ func getDigestFunction(digest DigestAlgo) *C.EVP_MD {
 		md = C.X_EVP_sm3()
 	}
 	return md
+}
+
+// ToX509Certificate converts the Tongsuo X509 certificate to a Go standard library
+// *x509.Certificate by serializing to DER and parsing back.
+func (c *Certificate) ToX509Certificate() (*x509.Certificate, error) {
+	if c.x == nil {
+		return nil, fmt.Errorf("certificate is nil: %w", ErrNilParameter)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var buf *C.uchar
+	length := C.i2d_X509(c.x, &buf)
+	if length <= 0 {
+		return nil, fmt.Errorf("failed to serialize certificate to DER: %w", PopError())
+	}
+	defer C.X_OPENSSL_free(unsafe.Pointer(buf))
+
+	derBytes := C.GoBytes(unsafe.Pointer(buf), C.int(length))
+	return x509.ParseCertificate(derBytes)
+}
+
+// AddExtensionByOID adds a custom extension to the certificate using an OID string.
+// The value is the raw DER-encoded extension content (will be wrapped in OCTET STRING).
+func (c *Certificate) AddExtensionByOID(oid string, critical bool, value []byte) error {
+	if c.x == nil {
+		return fmt.Errorf("certificate is nil: %w", ErrNilParameter)
+	}
+	if oid == "" {
+		return fmt.Errorf("oid is empty: %w", ErrNilParameter)
+	}
+	if len(value) == 0 {
+		return fmt.Errorf("value is empty: %w", ErrNilParameter)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	cOID := C.CString(oid)
+	defer C.free(unsafe.Pointer(cOID))
+
+	obj := C.OBJ_txt2obj(cOID, 1)
+	if obj == nil {
+		return fmt.Errorf("failed to parse OID %q: %w", oid, PopError())
+	}
+	defer C.ASN1_OBJECT_free(obj)
+
+	octet := C.ASN1_OCTET_STRING_new()
+	if octet == nil {
+		return fmt.Errorf("failed to create octet string: %w", ErrMallocFailure)
+	}
+	defer C.ASN1_OCTET_STRING_free(octet)
+
+	if C.ASN1_OCTET_STRING_set(octet, (*C.uchar)(&value[0]), C.int(len(value))) != 1 {
+		return fmt.Errorf("failed to set extension value: %w", PopError())
+	}
+
+	var critInt C.int
+	if critical {
+		critInt = 1
+	}
+
+	ext := C.X509_EXTENSION_create_by_OBJ(nil, obj, critInt, octet)
+	if ext == nil {
+		return fmt.Errorf("failed to create extension: %w", PopError())
+	}
+	defer C.X509_EXTENSION_free(ext)
+
+	if C.X509_add_ext(c.x, ext, -1) <= 0 {
+		return fmt.Errorf("failed to add extension: %w", PopError())
+	}
+
+	return nil
 }
 
 // LoadPEMFromFile loads a PEM file and returns the []byte format.

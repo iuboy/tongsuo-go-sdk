@@ -10,8 +10,11 @@
 
 package crypto
 
-// #cgo linux LDFLAGS: -lcrypto
-// #cgo darwin LDFLAGS: -lcrypto
-// #cgo windows CFLAGS: -DWIN32_LEAN_AND_MEAN
-// #cgo windows LDFLAGS: -lcrypto
+// #cgo CFLAGS: -I${SRCDIR}/../include
+// #cgo linux CFLAGS: -I/opt/local/tongsuo/include
+// #cgo linux LDFLAGS: -L/opt/local/tongsuo/lib -lssl -lcrypto
+// #cgo darwin CFLAGS: -I/opt/local/tongsuo/include
+// #cgo darwin LDFLAGS: -L/opt/local/tongsuo/lib -lssl -lcrypto
+// #cgo windows CFLAGS: -DWIN32_LEAN_AND_MEAN -I/opt/local/tongsuo/include
+// #cgo windows LDFLAGS: -L/opt/local/tongsuo/lib -lssl -lcrypto
 import "C"

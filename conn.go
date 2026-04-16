@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"runtime/cgo"
 	"sync"
 	"time"
 	"unsafe"
@@ -32,22 +33,20 @@ import (
 )
 
 var (
-	errZeroReturn = errors.New("zero return")
-	errWantRead   = errors.New("want read")
-	errWantWrite  = errors.New("want write")
 	errTryAgain   = errors.New("try again")
 )
 
 type Conn struct {
 	*SSL
 
-	conn           net.Conn
-	ctx            *Ctx // for gc
-	intoSSL        *crypto.ReadBio
-	fromSSL        *crypto.WriteBio
-	isShutdown     bool
-	mtx            sync.Mutex
-	wantReadFuture *utils.Future
+	conn              net.Conn
+	ctx              *Ctx // for gc
+	intoSSL           *crypto.ReadBio
+	fromSSL         *crypto.WriteBio
+	isShutdown       bool
+	mtx              sync.Mutex
+	wantReadFuture  *utils.Future
+	truncatedShutdown bool
 }
 
 type VerifyResult int
@@ -139,7 +138,10 @@ func newConn(conn net.Conn, ctx *Ctx) (*Conn, error) {
 	C.SSL_set_bio(ssl, (*C.BIO)(intoSSLCbio), (*C.BIO)(fromSSLCbio))
 
 	s := &SSL{ssl: ssl}
-	C.SSL_set_ex_data(s.ssl, get_ssl_idx(), unsafe.Pointer(s.ssl))
+	// 使用 cgo.Handle 将 Go *SSL 安全存入 SSL ex_data
+	// C 回调通过 cgo.Handle 取回 Go 对象，避免直接传递 Go 指针给 C
+	s.handle = cgo.NewHandle(s)
+	C.SSL_set_ex_data(s.ssl, get_ssl_idx(), handleToPtr(s.handle))
 
 	con := &Conn{
 		SSL:     s,
@@ -151,6 +153,9 @@ func newConn(conn net.Conn, ctx *Ctx) (*Conn, error) {
 	runtime.SetFinalizer(con, func(c *Conn) {
 		c.intoSSL.Disconnect(intoSSLCbio)
 		c.fromSSL.Disconnect(fromSSLCbio)
+		if c.handle != 0 {
+			c.handle.Delete()
+		}
 		C.SSL_free(c.ssl)
 	})
 
@@ -402,6 +407,17 @@ type ConnectionState struct {
 	CertificateChain      []*crypto.Certificate
 	CertificateChainError error
 	SessionReused         bool
+	// TruncatedShutdown 标记 TLS 连接是否在未收到对端 close_notify 的情况下被关闭。
+	//
+	// 安全含义（RFC 8446 Section 6.1）：
+	//   - TLS 连接的正常关闭要求双方发送 close_notify
+	//   - 截断关闭可能导致数据被截断而应用层无法感知
+	//   - 截断关闭可能表明中间人攻击或网络异常
+	//
+	// 应用应检查此标志：
+	//   - true  时应考虑已接收数据是否完整（如消息边界、Content-Length）
+	//   - false 表示正常关闭
+	TruncatedShutdown bool
 }
 
 func (c *Conn) ConnectionState() ConnectionState {
@@ -412,6 +428,7 @@ func (c *Conn) ConnectionState() ConnectionState {
 	return ConnectionState{
 		Certificate: cert, CertificateError: certErr, CertificateChain: certChain,
 		CertificateChainError: certChainErr, SessionReused: sessReused,
+		TruncatedShutdown: c.truncatedShutdown,
 	}
 }
 
@@ -457,14 +474,14 @@ func (c *Conn) shutdownLoop() error {
 	}
 
 	if errors.Is(err, io.ErrUnexpectedEOF) {
+		// 对端未发送 close_notify，标记截断关闭
+		// 符合 RFC 8446 Section 6.1：收到 close_notify 前才能认为 TLS 关闭正常
+		c.truncatedShutdown = true
 		err = nil
 	}
 
 	return err
 }
-
-// Close shuts down the SSL connection and closes the underlying wrapped
-// connection.
 func (c *Conn) Close() error {
 	c.mtx.Lock()
 	if c.isShutdown {

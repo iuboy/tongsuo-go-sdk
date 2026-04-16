@@ -19,6 +19,7 @@ import "C"
 
 import (
 	"fmt"
+	"runtime"
 )
 
 type AuthenticatedEncryptionCipherCtx interface {
@@ -69,73 +70,90 @@ func getGCMCipher(blocksize int) (*Cipher, error) {
 	return &Cipher{ptr: cipherptr}, nil
 }
 
-func NewGCMEncryptionCipherCtx(blocksize int, e *Engine, key, iv []byte) (
+func NewGCMEncryptionCipherCtx(blocksize int, key, iv []byte) (
 	AuthenticatedEncryptionCipherCtx, error,
 ) {
+	// 安全建议（NIST SP 800-38D Section 8）2.1）：
+	//   GCM IV 推荐长度为 96 位（12 字节），非标准长度虽可工作但会引入额外 GHASH 开销。
+	//   诏次加密操作应使用唯一 IV，推荐使用 gcm_security.go 中的 NewSecureGCMEncryptionCipherCtx
+	//   自动管理 IV 唯一性。
 	cipher, err := getGCMCipher(blocksize)
 	if err != nil {
 		return nil, err
 	}
-	ctx, err := newEncryptionCipherCtx(cipher, e, key, nil)
+	ctx, err := newEncryptionCipherCtx(cipher, key, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(iv) > 0 {
+		// 注意：IV 重用检测已移至 NewSecureGCMEncryptionCipherCtx
+		// 底层 NewGCMEncryptionCipherCtx 保持原始行为以确保 API 兼容性
+
 		err := ctx.SetCtrl(C.EVP_CTRL_GCM_SET_IVLEN, len(iv))
 		if err != nil {
-			return nil, fmt.Errorf("could not set IV len to %d: %w",
-				len(iv), err)
+			return nil, fmt.Errorf("GCM IV configuration failed: %w", err)
 		}
 		if C.EVP_EncryptInit_ex(ctx.ctx, nil, nil, nil, (*C.uchar)(&iv[0])) != 1 {
-			return nil, fmt.Errorf("failed to apply IV: %w", PopError())
+			return nil, fmt.Errorf("GCM IV configuration failed: %w", PopError())
 		}
 	}
 	return &authEncryptionCipherCtx{encryptionCipherCtx: ctx}, nil
 }
 
-func NewGCMDecryptionCipherCtx(blocksize int, e *Engine, key, iv []byte) (
+func NewGCMDecryptionCipherCtx(blocksize int, key, iv []byte) (
 	AuthenticatedDecryptionCipherCtx, error,
 ) {
 	cipher, err := getGCMCipher(blocksize)
 	if err != nil {
 		return nil, err
 	}
-	ctx, err := newDecryptionCipherCtx(cipher, e, key, nil)
+	ctx, err := newDecryptionCipherCtx(cipher, key, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(iv) > 0 {
+		// 注意：解密侧不做 IV 重用检测
+		// 正常使用场景中加密和解密必然使用相同 IV
+		// IV 重用检测仅在加密侧生效（防止同一 IV 加密不同明文）
+
 		err := ctx.SetCtrl(C.EVP_CTRL_GCM_SET_IVLEN, len(iv))
 		if err != nil {
-			return nil, fmt.Errorf("could not set IV len to %d: %w",
-				len(iv), err)
+			return nil, fmt.Errorf("GCM IV configuration failed: %w", err)
 		}
 		if C.EVP_DecryptInit_ex(ctx.ctx, nil, nil, nil, (*C.uchar)(&iv[0])) != 1 {
-			return nil, fmt.Errorf("failed to apply IV: %w", PopError())
+			return nil, fmt.Errorf("GCM IV configuration failed: %w", PopError())
 		}
 	}
 	return &authDecryptionCipherCtx{decryptionCipherCtx: ctx}, nil
 }
 
 func (ctx *authEncryptionCipherCtx) ExtraData(aad []byte) error {
-	if aad == nil {
+	if aad == nil || len(aad) == 0 {
 		return nil
+	}
+	if len(aad) > maxInt32 {
+		return fmt.Errorf("AAD too large: %d bytes (maximum %d)", len(aad), maxInt32)
 	}
 	var outlen C.int
 	if C.EVP_EncryptUpdate(ctx.ctx, nil, &outlen, (*C.uchar)(&aad[0]), C.int(len(aad))) != 1 {
 		return fmt.Errorf("failed to add additional authenticated data: %w", PopError())
 	}
+	runtime.KeepAlive(aad)
 	return nil
 }
 
 func (ctx *authDecryptionCipherCtx) ExtraData(aad []byte) error {
-	if aad == nil {
+	if aad == nil || len(aad) == 0 {
 		return nil
+	}
+	if len(aad) > maxInt32 {
+		return fmt.Errorf("AAD too large: %d bytes (maximum %d)", len(aad), maxInt32)
 	}
 	var outlen C.int
 	if C.EVP_DecryptUpdate(ctx.ctx, nil, &outlen, (*C.uchar)(&aad[0]), C.int(len(aad))) != 1 {
 		return fmt.Errorf("failed to add additional authenticated data: %w", PopError())
 	}
+	runtime.KeepAlive(aad)
 	return nil
 }
 

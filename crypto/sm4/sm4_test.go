@@ -154,43 +154,51 @@ B361FD5FFACD942F081485A83CA35D`
 func TestSM4GCMWithCipherBlock(t *testing.T) {
 	t.Parallel()
 
+	// 测试参数
 	key, _ := hex.DecodeString("0123456789ABCDEFFEDCBA9876543210")
 	iv, _ := hex.DecodeString("00001234567800000000ABCD")
 	aad, _ := hex.DecodeString("FEEDFACEDEADBEEFFEEDFACEDEADBEEFABADDAD2")
-	tag, _ := hex.DecodeString("83DE3541E4C2B58177E065A9BF7B62EC")
-	hexCipherText := `17F399F08C67D5EE19D0DC9969C4BB7D5FD46FD3756489069157B282BB200735D82710CA5C22F0CCFA7CBF93D496AC15A5
-6834CBCF98C397B4024A2691233B8D`
 	plainText, _ := hex.DecodeString(strings.ReplaceAll(hexPlainText1, "\n", ""))
-	cipherText, _ := hex.DecodeString(strings.ReplaceAll(hexCipherText, "\n", ""))
 
 	block, err := sm4.NewCipher(key)
 	if err != nil {
-		t.Fatal("failed to create SM4 cipher: ", err)
+		t.Fatal("failed to create SM4 cipher:", err)
 	}
 
 	stream, err := cipher.NewGCM(block)
 	if err != nil {
-		t.Fatal("failed to create GCM: ", err)
+		t.Fatal("failed to create GCM:", err)
 	}
 
-	cipherText1 := stream.Seal(nil, iv, plainText, aad)
+	// 加密 - Go cipher.NewGCM 使用 Tongsuo SM4 Block 接口
+	// 应该与 Tongsuo EVP API 产生相同的输出
+	cipherText := stream.Seal(nil, iv, plainText, aad)
 
-	if !bytes.Equal(cipherText1, append(cipherText, tag...)) {
-		t.Fatalf("exp:%x got:%x", cipherText1, append(cipherText, tag...))
+	// 预期输出（与 Tongsuo EVP GCM 一致）
+	expectedOutput, _ := hex.DecodeString("17F399F08C67D5EE19D0DC9969C4BB7D5FD46FD3756489069157B282BB200735D82710CA5C22F0CCFA7CBF93D496AC15A56834CBCF98C397B4024A2691233B8D83DE3541E4C2B58177E065A9BF7B62EC")
+
+	if !bytes.Equal(cipherText, expectedOutput) {
+		t.Fatalf("GCM output mismatch:\ngot:      %x\nexpected: %x", cipherText, expectedOutput)
+	}
+
+	// 验证输出格式：64字节密文 + 16字节tag = 80字节总长度
+	if len(cipherText) != len(plainText)+16 {
+		t.Fatalf("unexpected ciphertext length: got %d, want %d", len(cipherText), len(plainText)+16)
 	}
 
 	stream2, err := cipher.NewGCM(block)
 	if err != nil {
-		t.Fatal("failed to create GCM: ", err)
+		t.Fatal("failed to create GCM:", err)
 	}
 
-	plainText1, err := stream2.Open(nil, iv, cipherText1, aad)
+	// 解密并验证往返
+	plainText1, err := stream2.Open(nil, iv, cipherText, aad)
 	if err != nil {
-		t.Fatal("failed to decrypt: ", err)
+		t.Fatal("failed to decrypt:", err)
 	}
 
-	if !bytes.Equal(plainText1, plainText) {
-		t.Fatalf("exp:%x got:%x", plainText1, plainText)
+	if !bytes.Equal(plainText, plainText1) {
+		t.Fatalf("roundtrip failed: exp:%x got:%x", plainText, plainText1)
 	}
 }
 

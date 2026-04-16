@@ -18,7 +18,8 @@ package tongsuogo
 import "C"
 
 import (
-	"os"
+	"log"
+	"runtime/cgo"
 	"unsafe"
 )
 
@@ -46,17 +47,23 @@ func get_ssl_idx() C.int {
 type SSL struct {
 	ssl      *C.SSL
 	verifyCb VerifyCallback
+	handle   cgo.Handle
 }
 
 //export go_ssl_verify_cb_thunk
 func go_ssl_verify_cb_thunk(callback unsafe.Pointer, ok C.int, ctx *C.X509_STORE_CTX) C.int {
 	defer func() {
 		if err := recover(); err != nil {
-			// logger.Critf("openssl: verify callback panic'd: %v", err)
-			os.Exit(1)
+			log.Printf("tongsuo-go-sdk: SSL verify callback panic'd")
+			ok = 0
 		}
 	}()
-	verifyCb := (*SSL)(callback).verifyCb
+	v := ptrToHandle(callback).Value()
+	ssl, _ := v.(*SSL)
+	if ssl == nil {
+		return ok
+	}
+	verifyCb := ssl.verifyCb
 	// set up defaults just in case verify_cb is nil
 	if verifyCb != nil {
 		store := &CertificateStoreCtx{ctx: ctx, sslCtx: nil}
@@ -98,7 +105,9 @@ func (s *SSL) ClearOptions(options Options) Options {
 func (s *SSL) SetVerify(options VerifyOptions, verifyCb VerifyCallback) {
 	s.verifyCb = verifyCb
 	if verifyCb != nil {
-		C.SSL_set_verify(s.ssl, C.int(options), (*[0]byte)(C.X_SSL_verify_cb))
+		// 获取回调函数指针并解引用
+		cbPtr := C.X_SSL_verify_cb()
+		C.SSL_set_verify(s.ssl, C.int(options), (*[0]byte)(*cbPtr))
 	} else {
 		C.SSL_set_verify(s.ssl, C.int(options), nil)
 	}
@@ -159,16 +168,22 @@ func sniCbThunk(callback unsafe.Pointer, con *C.SSL, ad unsafe.Pointer, arg unsa
 
 	defer func() {
 		if err := recover(); err != nil {
-			// logger.Critf("openssl: verify callback sni panic'd: %v", err)
-			os.Exit(1)
+			log.Printf("tongsuo-go-sdk: SNI callback panic'd")
 		}
 	}()
 
-	sniCb := (*Ctx)(callback).sniCb
+	sniCb := ptrToHandle(callback).Value().(*Ctx).sniCb
 
-	s := &SSL{ssl: con, verifyCb: nil}
-	// This attaches a pointer to our SSL struct into the SNI callback.
-	C.SSL_set_ex_data(s.ssl, get_ssl_idx(), unsafe.Pointer(s.ssl))
+	// 尝试从 ex_data 恢复已有 Go *SSL，保留 verifyCb
+	var s *SSL
+	existingPtr := C.SSL_get_ex_data(con, get_ssl_idx())
+	if existingPtr != nil {
+		s, _ = ptrToHandle(existingPtr).Value().(*SSL)
+	} else {
+		s = &SSL{ssl: con, verifyCb: nil}
+		s.handle = cgo.NewHandle(s)
+		C.SSL_set_ex_data(s.ssl, get_ssl_idx(), handleToPtr(s.handle))
+	}
 
 	// Note: this is ctx.sni_cb, not C.sni_cb
 	return C.int(sniCb(s))
@@ -180,17 +195,29 @@ func alpn_cb_thunk(callback unsafe.Pointer, con *C.SSL, out unsafe.Pointer, outl
 ) C.int {
 	defer func() {
 		if err := recover(); err != nil {
-			// logger.Critf("openssl: verify callback alpn panic'd: %v", err)
-			os.Exit(1)
+			log.Printf("tongsuo-go-sdk: ALPN callback panic'd")
 		}
 	}()
 
-	alpnCb := (*Ctx)(callback).alpnCb
+	alpnCb := ptrToHandle(callback).Value().(*Ctx).alpnCb
 
-	s := &SSL{ssl: con, verifyCb: nil}
-	// This attaches a pointer to our SSL struct into the ALPN callback.
-	C.SSL_set_ex_data(s.ssl, get_ssl_idx(), unsafe.Pointer(s.ssl))
+	// 尝试从 ex_data 恢复已有 Go *SSL，保留 verifyCb
+	var s *SSL
+	existingPtr := C.SSL_get_ex_data(con, get_ssl_idx())
+	if existingPtr != nil {
+		s, _ = ptrToHandle(existingPtr).Value().(*SSL)
+	} else {
+		s = &SSL{ssl: con, verifyCb: nil}
+		s.handle = cgo.NewHandle(s)
+		C.SSL_set_ex_data(s.ssl, get_ssl_idx(), handleToPtr(s.handle))
+	}
 
-	// Ensure the out parameter is treated as a pointer to const unsigned char
+	// Note: this is ctx.sni_cb, not C.sni_cb
 	return C.int(alpnCb(s, out, outlen, in, inlen, arg))
+}
+
+func init() {
+	// 初始化 crypto 包中的回调 thunk 指针
+	// sni.c 中的 thunk 函数在 crypto/shim.c 的 static 变量中设置
+	C.X_init_crypto_thunks()
 }

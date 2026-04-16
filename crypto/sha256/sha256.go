@@ -14,7 +14,7 @@
 
 package sha256
 
-// #include "../shim.h"
+// #include "shim.h"
 import "C"
 
 import (
@@ -26,14 +26,11 @@ import (
 )
 
 type SHA256 struct {
-	ctx    *C.EVP_MD_CTX
-	engine *crypto.Engine
+	ctx *C.EVP_MD_CTX
 }
 
-func New() (*SHA256, error) { return NewWithEngine(nil) }
-
-func NewWithEngine(e *crypto.Engine) (*SHA256, error) {
-	hash := &SHA256{ctx: nil, engine: e}
+func New() (*SHA256, error) {
+	hash := &SHA256{ctx: nil}
 	hash.ctx = C.X_EVP_MD_CTX_new()
 	if hash.ctx == nil {
 		return nil, fmt.Errorf("failed to create md ctx %w", crypto.ErrMallocFailure)
@@ -54,7 +51,7 @@ func (s *SHA256) Close() {
 }
 
 func (s *SHA256) Reset() error {
-	if C.X_EVP_DigestInit_ex(s.ctx, C.X_EVP_sha256(), (*C.ENGINE)(s.engine.Engine())) != 1 {
+	if C.X_EVP_DigestInit_ex(s.ctx, C.X_EVP_sha256(), nil) != 1 {
 		return fmt.Errorf("failed to init digest ctx: %w", crypto.PopError())
 	}
 

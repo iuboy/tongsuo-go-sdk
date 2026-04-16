@@ -28,12 +28,8 @@ const (
 	SSLRecordSize = 16 * 1024
 )
 
-func nonCopyGoBytes(ptr uintptr, length int) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), length)
-}
-
 func nonCopyCString(data *C.char, size C.int) []byte {
-	return nonCopyGoBytes(uintptr(unsafe.Pointer(data)), int(size))
+	return unsafe.Slice((*byte)(unsafe.Pointer(data)), int(size))
 }
 
 var writeBioMapping = newMapping()

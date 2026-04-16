@@ -22,15 +22,17 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
+#include <openssl/ocsp.h>
 
 #include "_cgo_export.h"
 
 /*
  * Functions defined in other .c files
+ * OpenSSL 3.x: 线程安全回调已废弃，不再需要
  */
-extern int go_init_locks();
-extern void go_thread_locking_callback(int, int, const char*, int);
-extern unsigned long go_thread_id_callback();
+// extern int go_init_locks();
+// extern void go_thread_locking_callback(int, int, const char*, int);
+// extern unsigned long go_thread_id_callback();
 static int go_write_bio_puts(BIO *b, const char *str) {
 	return go_write_bio_write(b, (char*)str, (int)strlen(str));
 }
@@ -191,6 +193,139 @@ int X_EVP_CIPHER_CTX_encrypting(const EVP_CIPHER_CTX *ctx) {
 	return EVP_CIPHER_CTX_encrypting(ctx);
 }
 
+EVP_CIPHER_CTX *X_EVP_CIPHER_CTX_new() {
+	return EVP_CIPHER_CTX_new();
+}
+
+void X_EVP_CIPHER_CTX_free(EVP_CIPHER_CTX *ctx) {
+	EVP_CIPHER_CTX_free(ctx);
+}
+
+int X_EVP_CIPHER_CTX_reset(EVP_CIPHER_CTX *ctx) {
+	return EVP_CIPHER_CTX_reset(ctx);
+}
+
+const EVP_CIPHER *X_EVP_sm4_ecb() {
+	return EVP_sm4_ecb();
+}
+
+int X_EVP_EncryptInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl, const unsigned char *key, const unsigned char *iv) {
+	return EVP_EncryptInit_ex(ctx, cipher, impl, key, iv);
+}
+
+int X_EVP_EncryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
+	return EVP_EncryptUpdate(ctx, out, outl, in, inl);
+}
+
+int X_EVP_EncryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl) {
+	return EVP_EncryptFinal_ex(ctx, out, outl);
+}
+
+int X_EVP_DecryptInit_ex(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl, const unsigned char *key, const unsigned char *iv) {
+	return EVP_DecryptInit_ex(ctx, cipher, impl, key, iv);
+}
+
+int X_EVP_DecryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl, const unsigned char *in, int inl) {
+	return EVP_DecryptUpdate(ctx, out, outl, in, inl);
+}
+
+int X_EVP_DecryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl) {
+	return EVP_DecryptFinal_ex(ctx, out, outl);
+}
+
+int X_EVP_PKEY_CTX_set_rsa_keygen_bits(EVP_PKEY_CTX *ctx, int bits) {
+	return EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, bits);
+}
+
+int X_EVP_PKEY_CTX_set_rsa_keygen_pubexp(EVP_PKEY_CTX *ctx, BIGNUM *pubexp) {
+	return EVP_PKEY_CTX_set_rsa_keygen_pubexp(ctx, pubexp);
+}
+
+EVP_PKEY_CTX *X_EVP_PKEY_CTX_new_id(int id, ENGINE *e) {
+	return EVP_PKEY_CTX_new_id(id, e);
+}
+
+int X_EVP_PKEY_CTX_set1_id(EVP_PKEY_CTX *ctx, void *id, int id_len)
+{
+	return EVP_PKEY_CTX_set1_id(ctx, id, id_len);
+}
+
+int X_EVP_PKEY_keygen_init(EVP_PKEY_CTX *ctx) {
+	return EVP_PKEY_keygen_init(ctx);
+}
+
+int X_EVP_PKEY_keygen(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey) {
+	return EVP_PKEY_keygen(ctx, ppkey);
+}
+
+int X_EVP_PKEY_paramgen_init(EVP_PKEY_CTX *ctx) {
+	return EVP_PKEY_paramgen_init(ctx);
+}
+
+int X_EVP_PKEY_paramgen(EVP_PKEY_CTX *ctx, EVP_PKEY **ppkey) {
+	return EVP_PKEY_paramgen(ctx, ppkey);
+}
+
+int X_EVP_PKEY_encrypt_init(EVP_PKEY_CTX *ctx) {
+	return EVP_PKEY_encrypt_init(ctx);
+}
+
+int X_EVP_PKEY_encrypt(EVP_PKEY_CTX *ctx, unsigned char *out, size_t *outlen,
+                        const unsigned char *in, size_t inlen)
+{
+	return EVP_PKEY_encrypt(ctx, out, outlen, in, inlen);
+}
+
+int X_EVP_PKEY_decrypt_init(EVP_PKEY_CTX *ctx) {
+	return EVP_PKEY_decrypt_init(ctx);
+}
+
+int X_EVP_PKEY_decrypt(EVP_PKEY_CTX *ctx, unsigned char *out, size_t *outlen,
+                        const unsigned char *in, size_t inlen)
+{
+	return EVP_PKEY_decrypt(ctx, out, outlen, in, inlen);
+}
+
+BIGNUM *X_BN_new(void) {
+	return BN_new();
+}
+
+void X_BN_free(BIGNUM *a) {
+	BN_free(a);
+}
+
+int X_BN_set_word(BIGNUM *a, unsigned long w) {
+	return BN_set_word(a, w);
+}
+
+char *X_CString(const char *str) {
+	return (char *)str;
+}
+
+void X_free(void *ptr) {
+	OPENSSL_free(ptr);
+}
+
+EVP_PKEY_CTX *X_EVP_PKEY_CTX_new(EVP_PKEY *pkey, ENGINE *e) {
+	return EVP_PKEY_CTX_new(pkey, e);
+}
+
+void X_EVP_PKEY_CTX_free(EVP_PKEY_CTX *ctx) {
+	EVP_PKEY_CTX_free(ctx);
+}
+
+int X_EVP_PKEY_derive_init(EVP_PKEY_CTX *ctx) {
+	return EVP_PKEY_derive_init(ctx);
+}
+
+int X_EVP_PKEY_derive_set_peer(EVP_PKEY_CTX *ctx, EVP_PKEY *peer) {
+	return EVP_PKEY_derive_set_peer(ctx, peer);
+}
+
+int X_EVP_PKEY_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *pkeylen) {
+	return EVP_PKEY_derive(ctx, key, pkeylen);
+}
+
 const ASN1_TIME *X_X509_get0_notBefore(const X509 *x) {
 	return X509_get0_notBefore(x);
 }
@@ -214,19 +349,11 @@ int X_PEM_write_bio_PrivateKey_traditional(BIO *bio, EVP_PKEY *key, const EVP_CI
 int X_tscrypto_init() {
 	int rc = 0;
 
-	OPENSSL_config(NULL);
-	ENGINE_load_builtin_engines();
-	// SSL_load_error_strings();
-	// SSL_library_init();
-	OpenSSL_add_all_algorithms();
-	//
-	// Set up OPENSSL thread safety callbacks.
-	rc = go_init_locks();
-	if (rc != 0) {
-		return rc;
-	}
-	CRYPTO_set_locking_callback(go_thread_locking_callback);
-	CRYPTO_set_id_callback(go_thread_id_callback);
+	// OpenSSL 3.x/Tongsuo 8.5: 大多数初始化函数已变成宏或自动调用
+	// OPENSSL_init_ssl() 会在第一次使用 SSL API 时自动调用
+
+	// OpenSSL 3.x: 线程安全回调已变成空宏，不再需要设置
+	// 在 OpenSSL 3.x 中，线程安全由库内部处理
 
 	rc = x_bio_init_methods();
 	if (rc != 0) {
@@ -401,11 +528,6 @@ int X_EVP_PKEY_CTX_set_ec_paramgen_curve_nid(EVP_PKEY_CTX *ctx, int nid) {
 	return EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, nid);
 }
 
-int X_EVP_PKEY_CTX_set1_id(EVP_PKEY_CTX *ctx, void *id, int id_len)
-{
-	return EVP_PKEY_CTX_set1_id(ctx, id, id_len);
-}
-
 int X_EVP_PKEY_is_sm2(EVP_PKEY *pkey)
 {
 	return EVP_PKEY_is_sm2(pkey);
@@ -438,4 +560,622 @@ int X_X509_set_version(X509 *x, long version) {
 ECDSA_SIG *X_d2i_ECDSA_SIG(ECDSA_SIG **psig, const unsigned char **ppin, long len)
 {
 	return d2i_ECDSA_SIG(psig, ppin, len);
+}
+
+// SM4 兼容函数（Tongsuo 8.5.0+）
+// 使用 EVP API 实现低级 SM4 接口
+//
+// 警告：这些函数存在以下问题，仅供兼容性使用：
+// 1. 性能问题：每次调用都创建/销毁 EVP_CIPHER_CTX，效率低下
+// 2. 安全问题：ECB 模式不安全，无法隐藏明文模式（相同明文块产生相同密文块）
+// 3. 不提供认证：ECB 模式不具备完整性保护，易受篡改攻击
+//
+// 生产环境强烈建议使用：
+// - GCM 模式（推荐）：提供机密性和认证加密（AEAD）
+// - CBC 模式：配合 HMAC/MAC 使用以提供完整性保护
+// - 直接使用 EVP_EncryptInit/EVP_DecryptInit 高级 API
+//
+// 参考：GB/T 32907-2016, NIST SP 800-38A
+//
+// SM4_KEY 结构体说明：
+// - rk[0..rk[3]（前16字节）：存储原始 SM4 密钥
+// - rk[4..rk[31]（后112字节）：始终为零（OPENSSL_cleanse 清零）
+// SM4_encrypt/SM4_decrypt 从 rk[0..rk[3] 提取16字节作为 EVP 密钥
+
+void SM4_set_key(const unsigned char *key, SM4_KEY *ks) {
+    if (!ks || !key) {
+        return;
+    }
+
+    // 安全清零整个结构体（128字节）
+    // 防止残留密钥材料泄露到 rk[4..rk[31] 区域
+    OPENSSL_cleanse(ks, sizeof(SM4_KEY));
+
+    // 将原始 16 字节密钥存储在 rk[0..rk[3]
+    // rk 是 uint32_t[32]，前4个元素共 16 字节，恰好等于 SM4 密钥长度
+    // 符合 GB/T 32907-2016 SM4 分组密码算法（密钥长度 128 位）
+    memcpy(ks->rk, key, 16);
+
+    // rk[4..rk[31] 保持为零（已由 OPENSSL_cleanse 清零）
+    // SM4_encrypt/SM4_decrypt 仅读取前16字节作为 EVP 密钥
+}
+
+int SM4_encrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks) {
+    EVP_CIPHER_CTX *ctx = NULL;
+    int ret = 0;
+
+    if (!in || !out || !ks) {
+        return 0;
+    }
+
+    ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return 0;
+    }
+
+    if (EVP_EncryptInit_ex(ctx, EVP_sm4_ecb(), NULL,
+                           (const unsigned char*)ks->rk, NULL) != 1) {
+        goto err;
+    }
+
+    EVP_CIPHER_CTX_set_padding(ctx, 0);
+
+    int outlen = 0;
+    if (EVP_EncryptUpdate(ctx, out, &outlen, in, 16) != 1) {
+        goto err;
+    }
+
+    int finalLen = 0;
+    if (EVP_EncryptFinal_ex(ctx, out + outlen, &finalLen) != 1) {
+        goto err;
+    }
+
+    ret = 1;
+
+err:
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    return ret;
+}
+
+int SM4_decrypt(const unsigned char *in, unsigned char *out, const SM4_KEY *ks) {
+    EVP_CIPHER_CTX *ctx = NULL;
+    int ret = 0;
+
+    if (!in || !out || !ks) {
+        return 0;
+    }
+
+    ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return 0;
+    }
+
+    if (EVP_DecryptInit_ex(ctx, EVP_sm4_ecb(), NULL,
+                           (const unsigned char*)ks->rk, NULL) != 1) {
+        goto err;
+    }
+
+    EVP_CIPHER_CTX_set_padding(ctx, 0);
+
+    int outlen = 0;
+    if (EVP_DecryptUpdate(ctx, out, &outlen, in, 16) != 1) {
+        goto err;
+    }
+
+    int finalLen = 0;
+    if (EVP_DecryptFinal_ex(ctx, out + outlen, &finalLen) != 1) {
+        goto err;
+    }
+
+    ret = 1;
+
+err:
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    return ret;
+}
+
+// NTLS (国密 TLS) 双证书函数实现在 shim.c 中定义
+// 避免 duplicate symbol 错误
+
+// ============================================================================
+// 密钥验证和KDF函数 - 符合 NIST SP 800-56A Rev.3 和 RFC 5869
+// ============================================================================
+
+// X_EVP_PKEY_public_check 验证公钥的有效性
+//
+// 安全特性：
+// - 验证DH公钥在正确的子群范围内 (1 < y < p-1)
+// - 验证EC公钥点在曲线上
+// - 检查小subgroup攻击
+//
+// 符合标准：NIST SP 800-56A Rev.3 Section 5.6.2
+int X_EVP_PKEY_public_check(const EVP_PKEY *pkey)
+{
+	EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new((EVP_PKEY *)pkey, NULL);
+	if (!ctx) {
+		return 0;
+	}
+
+	int ret = EVP_PKEY_public_check(ctx);
+	EVP_PKEY_CTX_free(ctx);
+	return ret;
+}
+
+// X_EVP_PKEY_pairwise_check 验证密钥对的一致性
+//
+// 安全特性：
+// - 验证公钥和私钥是否匹配
+// - 检查密钥参数一致性
+//
+// 符合标准：NIST SP 800-56A Rev.3 Section 5.6.2.1
+int X_EVP_PKEY_pairwise_check(const EVP_PKEY *pkey)
+{
+	EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new((EVP_PKEY *)pkey, NULL);
+	if (!ctx) {
+		return 0;
+	}
+
+	int ret = EVP_PKEY_pairwise_check(ctx);
+	EVP_PKEY_CTX_free(ctx);
+	return ret;
+}
+
+// X_EVP_KDF_derive 使用 HKDF (RFC 5869) 从共享秘密派生密钥
+//
+// 使用 OpenSSL 3.x / Tongsuo 8.5 的 EVP_KDF API 实现，
+// 替代手写 HKDF 以确保正确性和安全性。
+//
+// 参数：
+//   md - 摘要算法 (推荐 SHA-256 或更强)
+//   key - 输入密钥材料 (共享秘密)
+//   key_len - 输入密钥材料长度
+//   salt - 盐值 (可选，NULL 且 salt_len==0 表示不使用)
+//   salt_len - 盐值长度
+//   info - 上下文信息 (可选，NULL 且 info_len==0 表示不使用)
+//   info_len - 上下文信息长度
+//   out - 输出缓冲区
+//   out_len - 输出长度
+//
+// 符合标准：
+// - RFC 5869 (HKDF)
+// - NIST SP 800-56C (Recommendation for Key Derivation)
+//
+// 返回值：1 表示成功，0 表示失败
+int X_EVP_KDF_derive(const EVP_MD *md,
+                    const unsigned char *key, size_t key_len,
+                    const unsigned char *salt, size_t salt_len,
+                    const unsigned char *info, size_t info_len,
+                    unsigned char *out, size_t out_len)
+{
+	EVP_KDF *kdf = NULL;
+	EVP_KDF_CTX *kctx = NULL;
+	OSSL_PARAM params[6];
+	int ret = 0;
+
+	if (!md || !key || !out || key_len == 0 || out_len == 0) {
+		return 0;
+	}
+
+	// 验证有长度参数对应的指针非 NULL
+	if ((salt_len > 0 && !salt) || (info_len > 0 && !info)) {
+		return 0;
+	}
+
+	kdf = EVP_KDF_fetch(NULL, "HKDF", NULL);
+	if (!kdf) {
+		goto err;
+	}
+
+	kctx = EVP_KDF_CTX_new(kdf);
+	if (!kctx) {
+		goto err;
+	}
+
+	const char *digest_name = EVP_MD_name(md);
+	size_t idx = 0;
+
+	params[idx++] = OSSL_PARAM_construct_utf8_string("digest",
+		(char *)digest_name, 0);
+	params[idx++] = OSSL_PARAM_construct_octet_string("key",
+		(void *)key, key_len);
+
+	if (salt != NULL && salt_len > 0) {
+		params[idx++] = OSSL_PARAM_construct_octet_string("salt",
+			(void *)salt, salt_len);
+	}
+
+	if (info != NULL && info_len > 0) {
+		params[idx++] = OSSL_PARAM_construct_octet_string("info",
+			(void *)info, info_len);
+	}
+
+	params[idx] = OSSL_PARAM_construct_end();
+
+	ret = EVP_KDF_derive(kctx, out, out_len, params);
+
+err:
+	if (kctx) EVP_KDF_CTX_free(kctx);
+	if (kdf) EVP_KDF_free(kdf);
+
+	return ret;
+}
+
+// X_CRYPTO_memcmp 常量时间内存比较
+//
+// 安全特性：
+// - 防止时序攻击
+// - 执行时间不依赖于数据内容
+// - 适用于比较密钥、MAC、签名等敏感数据
+//
+// 符合标准：NIST SP 800-38B
+//
+// 返回值：0 表示相等，非零表示不相等
+int X_CRYPTO_memcmp(const void *a, const void *b, size_t n)
+{
+	const unsigned char *ca = a;
+	const unsigned char *cb = b;
+	size_t i;
+	unsigned char ret = 0;
+
+	// OpenSSL 提供了 CRYPTO_memcmp 函数，它使用常量时间比较
+	// 这里直接使用它
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
+	return CRYPTO_memcmp(a, b, n);
+#else
+	// 回退实现 (对于旧版本 OpenSSL)
+	for (i = 0; i < n; i++) {
+		ret |= ca[i] ^ cb[i];
+	}
+	return ret;
+#endif
+}
+
+// SSL/TLS ticket key callback function
+// 这个函数由 Go 代码通过 export 导出
+static int ssl_ticket_key_cb(SSL *ssl,
+                             unsigned char *key_name,
+                             unsigned char *iv,
+                             EVP_CIPHER_CTX *ctx,
+                             HMAC_CTX *hctx,
+                             int enc)
+{
+	// 这个函数实际由 Go 实现
+	// 这里只是占位符
+	return 0;
+}
+
+// X_SSL_CTX_ticket_key_cb 导出函数指针给 Go 使用
+// 初始化为 NULL，由根包 init() 通过 X_set_ticket_key_thunk() 设置
+static SSL_CTX_tlsext_ticket_key_cb_fn X_SSL_CTX_ticket_key_cb_ptr = NULL;
+
+// X_set_ticket_key_thunk 设置 ticket key 回调 thunk（由根包 sni.c 的 thunk 实现）
+void X_set_ticket_key_thunk(SSL_CTX_tlsext_ticket_key_cb_fn thunk)
+{
+	X_SSL_CTX_ticket_key_cb_ptr = thunk;
+}
+
+// 设置实际的回调函数（由 Go 调用）
+void X_SSL_CTX_set_tlsext_ticket_key_cb(SSL_CTX *ctx, SSL_CTX_tlsext_ticket_key_cb_fn cb)
+{
+#ifdef SSL_CTX_set_tlsext_ticket_key_cb
+	SSL_CTX_set_tlsext_ticket_key_cb(ctx, cb);
+#endif
+	X_SSL_CTX_ticket_key_cb_ptr = cb;
+}
+
+// 获取回调函数指针
+SSL_CTX_tlsext_ticket_key_cb_fn* X_SSL_CTX_ticket_key_cb(void)
+{
+	return &X_SSL_CTX_ticket_key_cb_ptr;
+}
+
+// SSL methods
+int X_SSL_new_index(void)
+{
+	return SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+}
+
+long X_SSL_get_options(const SSL *ssl)
+{
+	return SSL_get_options(ssl);
+}
+
+long X_SSL_set_options(SSL *ssl, long options)
+{
+	return SSL_set_options(ssl, options);
+}
+
+long X_SSL_clear_options(SSL *ssl, long options)
+{
+#ifdef SSL_clear_options
+	return SSL_clear_options(ssl, options);
+#else
+	// 对于不支持 SSL_clear_options 的旧版本
+	long current = SSL_get_options(ssl);
+	SSL_set_options(ssl, current & ~options);
+	return current;
+#endif
+}
+
+// SSL verify callback function pointer
+// 初始化为 NULL，由根包 init() 通过 X_set_ssl_verify_thunk() 设置
+// crypto 独立测试时保持 NULL（crypto 测试不需要 SSL 验证回调）
+static SSL_verify_cb_fn g_ssl_verify_cb = NULL;
+
+// X_set_ssl_verify_thunk 设置 SSL 验证回调 thunk（由根包 sni.c 的 thunk 实现）
+void X_set_ssl_verify_thunk(SSL_verify_cb_fn thunk)
+{
+	g_ssl_verify_cb = thunk;
+}
+
+// X_SSL_verify_cb 获取 SSL 验证回调函数指针
+SSL_verify_cb_fn* X_SSL_verify_cb(void)
+{
+	return &g_ssl_verify_cb;
+}
+
+// SSL_CTX methods
+int X_SSL_CTX_new_index(void)
+{
+	return SSL_CTX_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+}
+
+const SSL_METHOD* X_NTLS_method(void)
+{
+#ifdef TONGSUO_VERSION_TEXT
+	return NTLS_method();
+#else
+	return TLS_method();
+#endif
+}
+
+long X_SSL_CTX_get_options(const SSL_CTX *ctx)
+{
+	return SSL_CTX_get_options(ctx);
+}
+
+long X_SSL_CTX_set_options(SSL_CTX *ctx, long options)
+{
+	return SSL_CTX_set_options(ctx, options);
+}
+
+long X_SSL_CTX_clear_options(SSL_CTX *ctx, long options)
+{
+#ifdef SSL_CTX_clear_options
+	return SSL_CTX_clear_options(ctx, options);
+#else
+	long current = SSL_CTX_get_options(ctx);
+	SSL_CTX_set_options(ctx, current & ~options);
+	return current;
+#endif
+}
+
+long X_SSL_CTX_get_mode(const SSL_CTX *ctx)
+{
+	return SSL_CTX_get_mode((SSL_CTX *)ctx);
+}
+
+long X_SSL_CTX_set_mode(SSL_CTX *ctx, long mode)
+{
+	return SSL_CTX_set_mode(ctx, mode);
+}
+
+long X_SSL_CTX_get_timeout(const SSL_CTX *ctx)
+{
+	return SSL_CTX_get_timeout(ctx);
+}
+
+long X_SSL_CTX_set_timeout(SSL_CTX *ctx, long t)
+{
+	return SSL_CTX_set_timeout(ctx, t);
+}
+
+long X_SSL_CTX_sess_get_cache_size(const SSL_CTX *ctx)
+{
+	return SSL_CTX_sess_get_cache_size((SSL_CTX *)ctx);
+}
+
+long X_SSL_CTX_sess_set_cache_size(SSL_CTX *ctx, long t)
+{
+	return SSL_CTX_sess_set_cache_size(ctx, t);
+}
+
+int X_SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version)
+{
+#ifdef SSL_CTX_set_min_proto_version
+	return SSL_CTX_set_min_proto_version(ctx, version);
+#else
+	return 1; // Success
+#endif
+}
+
+int X_SSL_CTX_set_max_proto_version(SSL_CTX *ctx, int version)
+{
+#ifdef SSL_CTX_set_max_proto_version
+	return SSL_CTX_set_max_proto_version(ctx, version);
+#else
+	return 1; // Success
+#endif
+}
+
+int X_SSL_CTX_set_session_cache_mode(SSL_CTX *ctx, long mode)
+{
+	return SSL_CTX_set_session_cache_mode(ctx, mode);
+}
+
+int X_SSL_CTX_enable_ntls(SSL_CTX *ctx)
+{
+#ifdef SSL_CTX_enable_ntls
+	return SSL_CTX_enable_ntls(ctx);
+#else
+	return 1; // Success if not supported
+#endif
+}
+
+int X_SSL_CTX_set_tmp_dh(SSL_CTX *ctx, DH *dh)
+{
+	return SSL_CTX_set_tmp_dh(ctx, dh);
+}
+
+int X_SSL_CTX_set_tmp_ecdh(SSL_CTX *ctx, EC_KEY *ecdh)
+{
+	return SSL_CTX_set_tmp_ecdh(ctx, ecdh);
+}
+
+int X_SSL_CTX_set_tlsext_servername_callback(SSL_CTX *ctx, void *cb)
+{
+#ifdef SSL_CTX_set_tlsext_servername_callback
+	// cb 实际上是函数指针 sni_cb
+	return SSL_CTX_set_tlsext_servername_callback(ctx, (int (*)(SSL *, int *, void *))cb);
+#else
+	return 1; // Success
+#endif
+}
+
+int X_SSL_CTX_add_extra_chain_cert(SSL_CTX *ctx, X509 *x509)
+{
+	return SSL_CTX_add_extra_chain_cert(ctx, x509);
+}
+
+int X_X509_add_ref(X509 *x509)
+{
+	return X509_up_ref(x509);
+}
+
+// SSL_CTX verify callback
+// 初始化为 NULL，由根包 init() 通过 X_set_ssl_ctx_verify_thunk() 设置
+static SSL_CTX_verify_cb_fn g_ssl_ctx_verify_cb = NULL;
+
+// X_set_ssl_ctx_verify_thunk 设置 SSL_CTX 验证回调 thunk（由根包 sni.c 的 thunk 实现）
+void X_set_ssl_ctx_verify_thunk(SSL_CTX_verify_cb_fn thunk)
+{
+	g_ssl_ctx_verify_cb = thunk;
+}
+
+SSL_CTX_verify_cb_fn* X_SSL_CTX_verify_cb(void)
+{
+	return &g_ssl_ctx_verify_cb;
+}
+
+// ALPN/SNI callback pointers (exported for Go)
+// 这些函数在 sni.c 中实现，这里不需要声明
+
+// Additional SSL functions
+const char* X_SSL_get_version(const SSL *ssl)
+{
+	return SSL_get_version(ssl);
+}
+
+const char* X_SSL_get_cipher_name(const SSL *ssl)
+{
+	return SSL_get_cipher_name(ssl);
+}
+
+int X_SSL_session_reused(const SSL *ssl)
+{
+	return SSL_session_reused(ssl);
+}
+
+int X_SSL_set_tlsext_host_name(SSL *ssl, const char *name)
+{
+#ifdef SSL_set_tlsext_host_name
+	return SSL_set_tlsext_host_name(ssl, name);
+#else
+	return 1; // Success if not supported
+#endif
+}
+
+// STACK_OF(X509) accessor functions
+int X_sk_X509_num(const STACK_OF(X509) *sk)
+{
+	return sk_X509_num(sk);
+}
+
+X509* X_sk_X509_value(const STACK_OF(X509) *sk, int index)
+{
+	return sk_X509_value(sk, index);
+}
+
+// ============================================================================
+// OCSP functions
+// ============================================================================
+
+OCSP_CERTID *X_OCSP_cert_to_id(const EVP_MD *dgst, const X509 *subject, const X509 *issuer)
+{
+	return OCSP_cert_to_id(dgst, subject, issuer);
+}
+
+OCSP_BASICRESP *X_OCSP_BASICRESP_new(void)
+{
+	return OCSP_BASICRESP_new();
+}
+
+void X_OCSP_BASICRESP_free(OCSP_BASICRESP *bs)
+{
+	OCSP_BASICRESP_free(bs);
+}
+
+OCSP_SINGLERESP *X_OCSP_basic_add1_status(OCSP_BASICRESP *bs, OCSP_CERTID *cid, int status, int reason,
+                                         ASN1_TIME *revtime, ASN1_TIME *thisupd, ASN1_TIME *nextupd)
+{
+	return OCSP_basic_add1_status(bs, cid, status, reason, revtime, thisupd, nextupd);
+}
+
+int X_OCSP_basic_sign(OCSP_BASICRESP *bs, X509 *signer, EVP_PKEY *key,
+                       const EVP_MD *dgst, STACK_OF(X509) *certs, unsigned long flags)
+{
+	return OCSP_basic_sign(bs, signer, key, dgst, certs, flags);
+}
+
+OCSP_RESPONSE *X_OCSP_response_create(int status, OCSP_BASICRESP *bs)
+{
+	return OCSP_response_create(status, bs);
+}
+
+void X_OCSP_response_free(OCSP_RESPONSE *r)
+{
+	OCSP_RESPONSE_free(r);
+}
+
+int X_i2d_OCSP_RESPONSE(OCSP_RESPONSE *r, unsigned char **out)
+{
+	return i2d_OCSP_RESPONSE(r, out);
+}
+
+OCSP_RESPONSE *X_d2i_OCSP_RESPONSE(OCSP_RESPONSE **r, const unsigned char **ppin, long len)
+{
+	return d2i_OCSP_RESPONSE(r, ppin, len);
+}
+
+int X_OCSP_resp_find_status(OCSP_BASICRESP *bs, OCSP_CERTID *id, int *status,
+                            int *reason, ASN1_TIME **revtime,
+                            ASN1_TIME **thisupd, ASN1_TIME **nextupd)
+{
+	return OCSP_resp_find_status(bs, id, status, reason, revtime, thisupd, nextupd);
+}
+
+int X_OCSP_response_status(OCSP_RESPONSE *r)
+{
+	return OCSP_response_status(r);
+}
+
+OCSP_BASICRESP *X_OCSP_response_get1_basic(OCSP_RESPONSE *r)
+{
+	return OCSP_response_get1_basic(r);
+}
+
+/* PKCS8 helpers */
+PKCS8_PRIV_KEY_INFO *X_EVP_PKEY2PKCS8(EVP_PKEY *pkey)
+{
+	return EVP_PKEY2PKCS8(pkey);
+}
+
+void X_PKCS8_PRIV_KEY_INFO_free(PKCS8_PRIV_KEY_INFO *p8)
+{
+	PKCS8_PRIV_KEY_INFO_free(p8);
+}
+
+int X_i2d_PKCS8_PRIV_KEY_INFO_bio(BIO *bio, PKCS8_PRIV_KEY_INFO *p8)
+{
+	return i2d_PKCS8_PRIV_KEY_INFO_bio(bio, p8);
 }

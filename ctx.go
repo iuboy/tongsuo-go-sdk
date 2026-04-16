@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/cgo"
 	"sync"
 	"time"
 	"unsafe"
@@ -35,6 +36,7 @@ type Ctx struct {
 	ctx   *C.SSL_CTX
 	cert  *crypto.Certificate
 	chain []*crypto.Certificate
+	handle cgo.Handle
 
 	key      crypto.PrivateKey
 	verifyCb VerifyCallback
@@ -61,10 +63,14 @@ func newCtx(method *C.SSL_METHOD) (*Ctx, error) {
 		return nil, fmt.Errorf("failed to create SSL CTX: %w", crypto.PopError())
 	}
 	ctx := &Ctx{ctx: sslCtx}
-	// Bypass go vet check, possibly passing Go type with embedded pointer to C
-	var p (*C.char) = (*C.char)(unsafe.Pointer(ctx))
-	C.SSL_CTX_set_ex_data(sslCtx, get_ssl_ctx_idx(), unsafe.Pointer(p))
+	// 使用 cgo.Handle 将 Go *Ctx 安全存入 SSL_CTX ex_data
+	// C 回调通过 cgo.Handle 取回 Go 对象，避免直接传递 Go 指针给 C
+	ctx.handle = cgo.NewHandle(ctx)
+	C.SSL_CTX_set_ex_data(sslCtx, get_ssl_ctx_idx(), handleToPtr(ctx.handle))
 	runtime.SetFinalizer(ctx, func(c *Ctx) {
+		if c.handle != 0 {
+			c.handle.Delete()
+		}
 		C.SSL_CTX_free(c.ctx)
 	})
 
@@ -74,9 +80,9 @@ func newCtx(method *C.SSL_METHOD) (*Ctx, error) {
 type SSLVersion int
 
 const (
-	SSLv3   SSLVersion = 0x0300 // Vulnerable to "POODLE" attack.
-	TLSv1   SSLVersion = 0x0301
-	TLSv1_1 SSLVersion = 0x0302
+	SSLv3 SSLVersion = 0x0300 // Deprecated: Vulnerable to "POODLE" attack. Will be rejected at runtime.
+	TLSv1 SSLVersion = 0x0301 // Deprecated: Prohibited by RFC 8996. Will be rejected at runtime.
+	TLSv1_1 SSLVersion = 0x0302 // Deprecated: Prohibited by RFC 8996. Will be rejected at runtime.
 	TLSv1_2 SSLVersion = 0x0303
 	TLSv1_3 SSLVersion = 0x0304
 	NTLS    SSLVersion = 0x0101
@@ -89,6 +95,13 @@ const (
 // NewCtxWithVersion creates an SSL context that is specific to the provided
 // SSL version. See http://www.openssl.org/docs/ssl/SSL_CTX_new.html for more.
 func NewCtxWithVersion(version SSLVersion) (*Ctx, error) {
+	// RFC 8996: SSLv3、TLSv1.0、TLSv1.1 已被正式废弃，禁止使用
+	switch version {
+	case SSLv3, TLSv1, TLSv1_1:
+		return nil, fmt.Errorf("tls version 0x%x is deprecated and prohibited by RFC 8996: %w",
+			int(version), crypto.ErrUnknownTLSVersion)
+	}
+
 	var enableNTLS bool
 	var method *C.SSL_METHOD
 	if version == NTLS {
@@ -111,7 +124,8 @@ func NewCtxWithVersion(version SSLVersion) (*Ctx, error) {
 	}
 
 	if version == AnyVersion {
-		C.X_SSL_CTX_set_min_proto_version(ctx.ctx, C.int(TLSv1))
+		// RFC 8996: TLSv1.0 和 TLSv1.1 已废弃，最低版本设为 TLSv1.2
+		C.X_SSL_CTX_set_min_proto_version(ctx.ctx, C.int(TLSv1_2))
 		C.X_SSL_CTX_set_max_proto_version(ctx.ctx, C.int(TLSv1_3))
 	} else {
 		C.X_SSL_CTX_set_min_proto_version(ctx.ctx, C.int(version))
@@ -121,11 +135,22 @@ func NewCtxWithVersion(version SSLVersion) (*Ctx, error) {
 	return ctx, nil
 }
 
+// defaultCipherList 安全默认密码套件列表。
+// 排除 RC4、DES、NULL、EXPORT、3DES、MD5 等弱算法。
+// 遵循 BCP 200 (RFC 9325) 和 NIST SP 800-52 Rev.2 推荐配置。
+const defaultCipherList = "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:!aNULL:!MD5:!DSS:!RC4:!DES:!3DES:!EXPORT"
+
+// defaultCipherSuites TLS 1.3 默认密码套件。
+const defaultCipherSuites = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256"
+
 // NewCtx creates a context that supports any TLS version 1.0 and newer.
 func NewCtx() (*Ctx, error) {
 	c, err := NewCtxWithVersion(AnyVersion)
 	if err == nil {
 		c.SetOptions(NoSSLv2 | NoSSLv3)
+		// 设置安全默认密码套件
+		_ = c.SetCipherList(defaultCipherList)
+		_ = c.SetCipherSuites(defaultCipherSuites)
 	}
 	return c, err
 }
@@ -145,7 +170,7 @@ func NewCtxFromFiles(certFile string, keyFile string) (*Ctx, error) {
 
 	certs := SplitPEM(certBytes)
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no PEM certificate found in '%s': %w", certFile, crypto.ErrNoCert)
+		return nil, fmt.Errorf("no PEM certificate found in certificate file: %w", crypto.ErrNoCert)
 	}
 	first, certs := certs[0], certs[1:]
 	cert, err := crypto.LoadCertificateFromPEM(first)
@@ -505,11 +530,16 @@ type VerifyCallback func(ok bool, store *CertificateStoreCtx) bool
 func go_ssl_ctx_verify_cb_thunk(callback unsafe.Pointer, ok C.int, ctx *C.X509_STORE_CTX) C.int {
 	defer func() {
 		if err := recover(); err != nil {
-			// logger.Critf("openssl: verify callback panic'd: %v", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "tongsuo-go-sdk: SSL_CTX verify callback panic'd\n")
+			ok = 0
 		}
 	}()
-	verifyCb := (*Ctx)(callback).verifyCb
+	v := ptrToHandle(callback).Value()
+	sslCtx, _ := v.(*Ctx)
+	if sslCtx == nil {
+		return ok
+	}
+	verifyCb := sslCtx.verifyCb
 	// set up defaults just in case verify_cb is nil
 	if verifyCb != nil {
 		store := &CertificateStoreCtx{ctx: ctx, sslCtx: nil}
@@ -527,7 +557,9 @@ func go_ssl_ctx_verify_cb_thunk(callback unsafe.Pointer, ok C.int, ctx *C.X509_S
 func (ctx *Ctx) SetVerify(options VerifyOptions, verifyCb VerifyCallback) {
 	ctx.verifyCb = verifyCb
 	if verifyCb != nil {
-		C.SSL_CTX_set_verify(ctx.ctx, C.int(options), (*[0]byte)(C.X_SSL_CTX_verify_cb))
+		// 获取回调函数指针并解引用（与 ssl.go SetVerify 保持一致）
+		cbPtr := C.X_SSL_CTX_verify_cb()
+		C.SSL_CTX_set_verify(ctx.ctx, C.int(options), (*[0]byte)(*cbPtr))
 	} else {
 		C.SSL_CTX_set_verify(ctx.ctx, C.int(options), nil)
 	}
@@ -570,7 +602,8 @@ type TLSExtServernameCallback func(ssl *SSL) SSLTLSExtErr
 // http://stackoverflow.com/questions/22373332/serving-multiple-domains-in-one-box-with-sni
 func (ctx *Ctx) SetTLSExtServernameCallback(sniCb TLSExtServernameCallback) {
 	ctx.sniCb = sniCb
-	C.X_SSL_CTX_set_tlsext_servername_callback(ctx.ctx, (*[0]byte)(C.sni_cb))
+	// sni_cb 是在 sni.c 中定义的 C 函数，直接使用函数名
+	C.X_SSL_CTX_set_tlsext_servername_callback(ctx.ctx, unsafe.Pointer(C.sni_cb))
 }
 
 type TLSExtAlpnCallback func(ssl *SSL, out unsafe.Pointer, outlen unsafe.Pointer, in unsafe.Pointer, inlen uint,

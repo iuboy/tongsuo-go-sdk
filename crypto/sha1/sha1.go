@@ -14,7 +14,7 @@
 
 package sha1
 
-// #include "../shim.h"
+// #include "shim.h"
 import "C"
 
 import (
@@ -28,14 +28,11 @@ import (
 const MDSize = 20
 
 type SHA1 struct {
-	ctx    *C.EVP_MD_CTX
-	engine *crypto.Engine
+	ctx *C.EVP_MD_CTX
 }
 
-func New() (*SHA1, error) { return NewWithEngine(nil) }
-
-func NewWithEngine(e *crypto.Engine) (*SHA1, error) {
-	hash := &SHA1{ctx: nil, engine: e}
+func New() (*SHA1, error) {
+	hash := &SHA1{ctx: nil}
 	hash.ctx = C.X_EVP_MD_CTX_new()
 	if hash.ctx == nil {
 		return nil, fmt.Errorf("failed to create md ctx: %w", crypto.ErrMallocFailure)
@@ -56,7 +53,7 @@ func (s *SHA1) Close() {
 }
 
 func (s *SHA1) Reset() error {
-	if C.X_EVP_DigestInit_ex(s.ctx, C.X_EVP_sha1(), (*C.ENGINE)(s.engine.Engine())) != 1 {
+	if C.X_EVP_DigestInit_ex(s.ctx, C.X_EVP_sha1(), nil) != 1 {
 		return fmt.Errorf("failed to init digest ctx %w", crypto.PopError())
 	}
 
