@@ -307,7 +307,10 @@ func DeriveSharedSecretWithSecurityLevel(
 	if buffer == nil {
 		return nil, ErrMallocFailure
 	}
-	defer C.X_OPENSSL_free(buffer)
+	defer func() {
+		C.OPENSSL_cleanse(buffer, buffLen)
+		C.X_OPENSSL_free(buffer)
+	}()
 
 	// 派生共享秘密
 	//
@@ -467,24 +470,22 @@ func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLev
 	return output, nil
 }
 
-// DeriveSharedSecretBasic DH密钥派生（基本模式，返回原始共享秘密）
+// DeriveSharedSecretBasic DH密钥派生（基本模式）
 //
-// Deprecated: 此函数返回未经 KDF 处理的原始共享秘密，直接使用存在安全风险
-// （NIST SP 800-56A Rev.3 Section 6 要求所有 DH 输出必须经过 KDF）。
-// 请使用 DeriveSharedSecret() 代替，该函数内置 HKDF 或 KDF_X9_63 处理。
+// Deprecated: 此函数名称暗示返回原始共享秘密，但为了安全现在内部已强制使用 KDF。
+// 请使用 DeriveSharedSecret() 代替，该函数提供更灵活的 KDF 配置。
 //
-// 此函数执行DH密钥协商，返回原始共享秘密，不经过KDF处理。
-// 通信双方调用此函数将得到相同的共享秘密。
+// 此函数执行DH密钥协商，内部使用默认 KDF 配置处理共享秘密。
+// 通信双方调用此函数将得到相同的派生密钥。
 //
-// 安全警告：
-// - 原始共享秘密不建议直接用作会话密钥
-// - 推荐使用 DeriveSharedSecret() 并配置KDF参数
-// - 如需自行处理KDF，请确保双方使用相同的盐值和信息参数
+// 安全说明：
+// - 内部强制使用 HKDF-SHA256 处理原始共享秘密
+// - 符合 NIST SP 800-56A Rev.3 Section 6 要求
+// - 双方必须使用相同的默认配置才能得到一致的密钥
 //
 // 符合标准：
 // - NIST SP 800-56A Rev.3 Section 5.7.1.1 (Basic Key Agreement)
-// - ANSI X9.42 (Diffie-Hellman Key Agreement)
-// - ANSI X9.63 (Elliptic Curve Key Agreement)
+// - NIST SP 800-56C (Key Derivation)
 //
 // 参数：
 //
@@ -493,57 +494,25 @@ func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLev
 //
 // 返回值：
 //
-//	原始共享秘密（双方一致）
+//	经过KDF处理的共享密钥（双方一致）
 //	error - 错误
 func DeriveSharedSecretBasic(private PrivateKey, public PublicKey) ([]byte, error) {
-	// 参数验证
-	if private == nil {
-		return nil, fmt.Errorf("private key is nil")
-	}
-	if public == nil {
-		return nil, fmt.Errorf("public key is nil")
-	}
-
-	// 验证对方公钥的有效性（符合 NIST SP 800-56A Section 5.6.2.1）
-	if C.X_EVP_PKEY_public_check(public.EvpPKey()) != 1 {
-		return nil, fmt.Errorf("peer public key validation failed: %w", PopError())
+	// 使用确定性 KDF 配置：固定盐值确保双方独立调用得到一致的派生密钥
+	// 固定盐值的安全性低于随机盐值，但远优于直接使用原始 DH 共享秘密
+	// 符合 NIST SP 800-56C 的最低要求
+	kdfConfig := &DHKDFConfig{
+		UseKDF:    true,
+		KDFDigest: SHA256Method(),
+		KDFSalt:   make([]byte, 32), // 全零固定盐值（确定性，双方一致）
+		KDFInfo:   []byte("tongsuo-go-sdk-dh-basic-kdf"),
 	}
 
-	// 创建密钥派生上下文
-	dhCtx := C.X_EVP_PKEY_CTX_new(private.EvpPKey(), nil)
-	if dhCtx == nil {
-		return nil, PopError()
+	result, err := DeriveSharedSecret(private, public, kdfConfig)
+	if err != nil {
+		return nil, err
 	}
-	defer C.X_EVP_PKEY_CTX_free(dhCtx)
-
-	// 初始化密钥派生
-	if C.X_EVP_PKEY_derive_init(dhCtx) != 1 {
-		return nil, PopError()
+	if !result.PeerPublicKeyValid {
+		return nil, fmt.Errorf("peer public key validation failed")
 	}
-
-	// 设置对方公钥
-	if C.X_EVP_PKEY_derive_set_peer(dhCtx, public.EvpPKey()) != 1 {
-		return nil, PopError()
-	}
-
-	// 确定共享秘密长度
-	var buffLen C.size_t
-	if C.X_EVP_PKEY_derive(dhCtx, nil, &buffLen) != 1 {
-		return nil, PopError()
-	}
-
-	// 分配缓冲区
-	buffer := C.X_OPENSSL_malloc(buffLen)
-	if buffer == nil {
-		return nil, ErrMallocFailure
-	}
-	defer C.X_OPENSSL_free(buffer)
-
-	// 派生原始共享秘密
-	if C.X_EVP_PKEY_derive(dhCtx, (*C.uchar)(buffer), &buffLen) != 1 {
-		return nil, PopError()
-	}
-
-	// 返回原始共享秘密（不做KDF处理，保证双方一致）
-	return C.GoBytes(buffer, C.int(buffLen)), nil
+	return result.SharedSecret, nil
 }

@@ -14,6 +14,14 @@
 
 package crypto
 
+// #include "shim.h"
+import "C"
+
+import (
+	"fmt"
+	"unsafe"
+)
+
 type NID int
 
 const (
@@ -208,4 +216,45 @@ const (
 	NidEd25519                        NID = 1087
 	NidEd448                          NID = 1088
 	NidSM2                            NID = 1172
+
+	// GM/T 国密算法 NID 常量
+	// 注意：这些值对应 Tongsuo 8.5+ (基于 OpenSSL 3.x) 的 NID 分配。
+	// 不同版本的 Tongsuo/OpenSSL 可能使用不同的 NID 值。
+	// 使用 LookupNID() 可在运行时通过 OID 字符串查找 NID。
+
+	// SM3 密码杂凑算法 (GM/T 0003-2012)
+	// OID: 1.2.156.10197.1.401
+	NidSM3 NID = 1145
+
+	// SM4 分组密码 (GM/T 0004-2012)
+	// OID: 1.2.156.10197.1.104
+	NidSM4 NID = 913
+
+	// SM4-ECB 模式
+	NidSM4ECB NID = 914
+
+	// SM4-CBC 模式
+	NidSM4CBC NID = 915
+
+	// SM4-CTR 模式
+	NidSM4CTR NID = 916
+
+	// SM2-SM3 签名算法 (GM/T 0009-2012)
+	// OID: 1.2.156.10197.1.501
+	NidSM2WithSM3 NID = 1173
 )
+
+// LookupNID resolves an OID string (e.g. "1.2.156.10197.1.301") to its NID
+// using the Tongsuo library's OID table. Returns an error if the OID is unknown.
+func LookupNID(oid string) (NID, error) {
+	if oid == "" {
+		return 0, fmt.Errorf("empty OID string")
+	}
+	cOID := C.CString(oid)
+	defer C.free(unsafe.Pointer(cOID))
+	nid := C.OBJ_txt2nid(cOID)
+	if nid == 0 {
+		return 0, fmt.Errorf("unknown OID: %q", oid)
+	}
+	return NID(nid), nil
+}

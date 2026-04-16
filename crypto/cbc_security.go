@@ -60,9 +60,7 @@ import (
 //
 //	ctx - 解密上下文
 //	ciphertext - 密文
-//	hmacKey - HMAC密钥（可选，如果提供则验证）
-//	hmacDigest - HMAC摘要算法（可选）
-//	expectLen - 期望的明文长度（可选）
+//	expectLen - 期望的明文长度（可选，0表示不检查）
 //
 // 返回值：
 //
@@ -72,7 +70,7 @@ import (
 // 符合标准：
 // - NIST SP 800-38A Addendum (Padding Oracle 防护建议)
 // - RFC 5246 (Encrypt-then-MAC)
-func CBCSecureDecrypt(ctx DecryptionCipherCtx, ciphertext, hmacKey []byte, hmacDigest DigestAlgo, expectLen int) ([]byte, error) {
+func CBCSecureDecrypt(ctx DecryptionCipherCtx, ciphertext []byte, expectLen int) ([]byte, error) {
 	// ========== 填充oracle攻击防护（有限） ==========
 	//
 	// 此函数提供以下防护措施：
@@ -118,15 +116,8 @@ func CBCSecureDecrypt(ctx DecryptionCipherCtx, ciphertext, hmacKey []byte, hmacD
 
 	// ========== HMAC验证阶段 ==========
 	//
-	// 注意（C-02 修复）：
-	// 此函数不执行 HMAC 验证。如果需要 HMAC 认证，
-	// 请使用 VerifyThenMACDecrypt（先验证 MAC 再解密），
-	// 或使用 CBCSafeWrapper（自动管理 HMAC）。
-	//
-	// 之前的实现在此计算 HMAC 但不与预期值比较（伪验证），
-	// 已移除以避免误导。hmacKey/hmacDigest 参数保留以兼容现有调用方。
-	_ = hmacKey
-	_ = hmacDigest
+	// 注意：此函数不执行 HMAC 验证。
+	// 如需 HMAC 认证，请使用 VerifyThenMACDecrypt 或 CBCSafeWrapper。
 
 	// ========== 长度验证阶段 ==========
 	//
@@ -281,11 +272,11 @@ func VerifyThenMACDecrypt(decCtx DecryptionCipherCtx, key, iv, ciphertext, expec
 	// 2. 常量时间MAC验证
 	// 使用ConstantTimeCompare防止时序攻击
 	if !ConstantTimeCompare(actualMAC, expectedMAC) {
-		return nil, fmt.Errorf("MAC verification failed")
+		return nil, fmt.Errorf("decryption failed")
 	}
 
 	// 3. MAC验证成功，现在解密
-	plaintext, err := CBCSecureDecrypt(decCtx, ciphertext, nil, DigestNull, 0)
+	plaintext, err := CBCSecureDecrypt(decCtx, ciphertext, 0)
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed")
 	}
@@ -509,15 +500,17 @@ func ValidatePKCS7Padding(data []byte, blockSize int) error {
 	bad := subtle.ConstantTimeEq(rangeInvalid, 1)
 
 	// 常量时间填充验证：检查所有填充字节是否等于 padByte
-	// 无论前面验证是否失败，都必须遍历所有填充位置以保持常量时间
-	checkLen := padLen
-	if checkLen > len(data) {
-		checkLen = len(data)
+	// 无论前面验证是否失败，都必须遍历固定数量（blockSize）个位置以保持常量时间
+	// 始终从 len(data)-blockSize 开始，确保循环次数不依赖于 padLen
+	startIdx := len(data) - blockSize
+	if startIdx < 0 {
+		startIdx = 0
 	}
-	startIdx := len(data) - checkLen
 	for i := startIdx; i < len(data); i++ {
+		// 仅在填充范围内检查（i >= len(data)-padLen），否则跳过但不泄露
+		inPadRange := subtle.ConstantTimeLessOrEq(len(data)-padLen, i)
 		mismatch := subtle.ConstantTimeEq(int32(data[i]), int32(padByte)) ^ 1
-		bad |= mismatch
+		bad |= inPadRange & mismatch
 	}
 
 	if bad == 1 {

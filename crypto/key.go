@@ -251,6 +251,10 @@ type PrivateKey interface {
 	// format
 	MarshalPKCS8PrivateKeyPEM() (pemBlock []byte, err error)
 
+	// MarshalPKCS8PrivateKeyDER converts the private key to DER-encoded PKCS8
+	// format
+	MarshalPKCS8PrivateKeyDER() (derBlock []byte, err error)
+
 	// Wipe 安全地销毁密钥材料
 	//
 	// 安全特性：
@@ -338,6 +342,9 @@ func (key *pKey) SignWithOptions(method Method, data []byte, options *SignOption
 		// 验证摘要算法：SM2 必须使用 SM3
 		sm3Method := C.X_EVP_sm3()
 		if method != nil && method != sm3Method {
+		if len(data) == 0 {
+			return nil, ErrNilParameter
+		}
 			return nil, fmt.Errorf("SM2 signature must use SM3 digest (GM/T 0009-2012)")
 		}
 
@@ -464,6 +471,9 @@ func (key *pKey) VerifyWithOptions(method Method, data, sig []byte, options *Sig
 		if method != nil && method != sm3Method {
 			return fmt.Errorf("SM2 verification must use SM3 digest (GM/T 0009-2012)")
 		}
+		if len(data) == 0 || len(sig) == 0 {
+			return ErrNilParameter
+		}
 
 		if options == nil {
 			sm2DefaultIDWarnOnce.Do(func() {
@@ -569,6 +579,60 @@ func (key *pKey) MarshalPKCS8PrivateKeyPEM() ([]byte, error) {
 	return result, nil
 }
 
+// MarshalPKCS8PrivateKeyDER converts the private key to DER-encoded PKCS8 format.
+func (key *pKey) MarshalPKCS8PrivateKeyDER() ([]byte, error) {
+	if key.key == nil {
+		return nil, ErrEmptyKey
+	}
+
+	// 使用 EVP_PKEY_get0_EC_KEY 等获取底层密钥后，
+	// 通过 i2d_ECPrivateKey 等序列化为 DER。
+	// 但 PKCS8 格式需要用不同的编码方式。
+	//
+	// 最可靠的方式：使用 d2i_AutoPrivateKey 的逆操作。
+	// OpenSSL 提供了 i2d_PrivateKey 用于传统格式，
+	// PKCS8 格式需要将 EVP_PKEY 编码为 PKCS8 DER。
+	//
+	// 方法：构造 PKCS8 结构体再编码
+	// 1. EVP_PKEY2PKCS8 将 EVP_PKEY 转为 PKCS8 结构
+	// 2. i2d_PKCS8_PRIV_KEY_INFO 编码为 DER
+	//
+	// 由于 CGO 不直接暴露 EVP_PKEY2PKCS8，
+	// 使用 BIO + i2d_PKCS8PrivateKeyInfo_bio（OpenSSL 3.x）
+	// 或者用 i2d_PrivateKey_bio 然后手动检测格式。
+	//
+	// 最终方案：使用最简单的方式 - 直接调用 PEM 编码后去除 PEM 头尾，
+	// 然后 base64 解码得到 DER。但这效率低。
+	//
+	// 实际上 i2d_PrivateKey_bio 对 EC 密钥输出 SEC1 格式（非 PKCS8）。
+	// 正确方案需要 EVP_PKEY2PKCS8。在 shim.c 中添加该函数。
+
+	bio := C.BIO_new(C.BIO_s_mem())
+	if bio == nil {
+		return nil, ErrMallocFailure
+	}
+	defer C.BIO_free(bio)
+
+	// i2d_PrivateKey_bio 输出传统格式（PKCS1 for RSA, SEC1 for EC）
+	// 对 PKCS8，需要通过 X_EVP_PKEY2PKCS8 转换
+	p8 := C.X_EVP_PKEY2PKCS8(key.key)
+	if p8 == nil {
+		return nil, PopError()
+	}
+	defer C.X_PKCS8_PRIV_KEY_INFO_free(p8)
+
+	if int(C.X_i2d_PKCS8_PRIV_KEY_INFO_bio(bio, p8)) != 1 {
+		return nil, PopError()
+	}
+
+	ret, err := io.ReadAll(asAnyBio(bio))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read bio data: %w", err)
+	}
+
+	return ret, nil
+}
+
 // Wipe 安全地销毁密钥材料
 //
 // 安全特性：
@@ -612,6 +676,9 @@ func (key *pKey) Wipe() error {
 func (key *pKey) Encrypt(data []byte) ([]byte, error) {
 	if key.key == nil {
 		return nil, ErrNoKey
+	}
+	if len(data) == 0 {
+		return nil, ErrNilParameter
 	}
 
 	ctx := C.X_EVP_PKEY_CTX_new(key.key, nil)

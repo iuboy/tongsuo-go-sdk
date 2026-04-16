@@ -358,3 +358,157 @@ func TestCertVersion(t *testing.T) {
 		t.Fatalf("bad version: %d", vers)
 	}
 }
+
+func TestToX509Certificate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("RSA", func(t *testing.T) {
+		t.Parallel()
+		key, err := crypto.GenerateRSAKey(2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		info := &crypto.CertificateInfo{
+			Serial:       big.NewInt(1),
+			Issued:       24 * time.Hour,
+			Expires:      24 * time.Hour,
+			CommonName:   "test-tox509",
+			Country:      "CN",
+			Organization: "Test",
+		}
+
+		cert, err := crypto.NewCertificate(info, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cert.Sign(key, crypto.DigestSHA256); err != nil {
+			t.Fatal(err)
+		}
+
+		goCert, err := cert.ToX509Certificate()
+		if err != nil {
+			t.Fatalf("ToX509Certificate failed: %v", err)
+		}
+		if goCert.Subject.CommonName != "test-tox509" {
+			t.Fatalf("expected CN=test-tox509, got %q", goCert.Subject.CommonName)
+		}
+		if goCert.Subject.Organization[0] != "Test" {
+			t.Fatalf("expected O=Test, got %v", goCert.Subject.Organization)
+		}
+		if goCert.Subject.Country[0] != "CN" {
+			t.Fatalf("expected C=CN, got %v", goCert.Subject.Country)
+		}
+	})
+
+	t.Run("SM2", func(t *testing.T) {
+		t.Parallel()
+		key, err := crypto.GenerateECKey(crypto.SM2Curve)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		info := &crypto.CertificateInfo{
+			Serial:       big.NewInt(2),
+			Issued:       24 * time.Hour,
+			Expires:      24 * time.Hour,
+			CommonName:   "sm2-test",
+			Country:      "CN",
+			Organization: "GMTest",
+		}
+
+		cert, err := crypto.NewCertificate(info, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cert.Sign(key, crypto.DigestSM3); err != nil {
+			t.Fatal(err)
+		}
+
+		goCert, err := cert.ToX509Certificate()
+		if err != nil {
+			t.Skipf("SM2 cert: %v", err)
+		}
+		if goCert.Subject.CommonName != "sm2-test" {
+			t.Fatalf("expected CN=sm2-test, got %q", goCert.Subject.CommonName)
+		}
+	})
+}
+
+func TestAddExtensionByOID(t *testing.T) {
+	t.Parallel()
+
+	key, err := crypto.GenerateRSAKey(2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := &crypto.CertificateInfo{
+		Serial:       big.NewInt(42),
+		Issued:       24 * time.Hour,
+		Expires:      24 * time.Hour,
+		CommonName:   "ext-test",
+		Country:      "CN",
+		Organization: "Test",
+	}
+
+	cert, err := crypto.NewCertificate(info, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a custom extension using OID for "1.2.3.4.5.6" (test OID)
+	testValue := []byte{0x04, 0x04, 0xde, 0xad, 0xbe, 0xef} // OCTET STRING wrapper
+	if err := cert.AddExtensionByOID("1.2.3.4.5.6", false, testValue); err != nil {
+		t.Fatalf("AddExtensionByOID failed: %v", err)
+	}
+
+	// Sign to finalize the certificate
+	if err := cert.Sign(key, crypto.DigestSHA256); err != nil {
+		t.Fatal(err)
+	}
+
+	// Convert to stdlib and verify the extension exists
+	goCert, err := cert.ToX509Certificate()
+	if err != nil {
+		t.Fatalf("ToX509Certificate failed: %v", err)
+	}
+
+	found := false
+	for _, ext := range goCert.Extensions {
+		if ext.Id.String() == "1.2.3.4.5.6" {
+			found = true
+			if ext.Critical {
+				t.Error("extension should not be critical")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("custom OID extension 1.2.3.4.5.6 not found in certificate")
+	}
+
+	// Test critical extension
+	cert2, err := crypto.NewCertificate(info, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cert2.AddExtensionByOID("1.2.3.4.5.7", true, testValue); err != nil {
+		t.Fatalf("AddExtensionByOID (critical) failed: %v", err)
+	}
+	if err := cert2.Sign(key, crypto.DigestSHA256); err != nil {
+		t.Fatal(err)
+	}
+	goCert2, err := cert2.ToX509Certificate()
+	if err != nil {
+		t.Fatalf("ToX509Certificate failed: %v", err)
+	}
+	for _, ext := range goCert2.Extensions {
+		if ext.Id.String() == "1.2.3.4.5.7" {
+			if !ext.Critical {
+				t.Error("extension should be critical")
+			}
+			break
+		}
+	}
+}

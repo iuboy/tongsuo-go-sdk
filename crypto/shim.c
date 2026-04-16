@@ -22,6 +22,7 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
+#include <openssl/ocsp.h>
 
 #include "_cgo_export.h"
 
@@ -1093,4 +1094,88 @@ int X_sk_X509_num(const STACK_OF(X509) *sk)
 X509* X_sk_X509_value(const STACK_OF(X509) *sk, int index)
 {
 	return sk_X509_value(sk, index);
+}
+
+// ============================================================================
+// OCSP functions
+// ============================================================================
+
+OCSP_CERTID *X_OCSP_cert_to_id(const EVP_MD *dgst, const X509 *subject, const X509 *issuer)
+{
+	return OCSP_cert_to_id(dgst, subject, issuer);
+}
+
+OCSP_BASICRESP *X_OCSP_BASICRESP_new(void)
+{
+	return OCSP_BASICRESP_new();
+}
+
+void X_OCSP_BASICRESP_free(OCSP_BASICRESP *bs)
+{
+	OCSP_BASICRESP_free(bs);
+}
+
+OCSP_SINGLERESP *X_OCSP_basic_add1_status(OCSP_BASICRESP *bs, OCSP_CERTID *cid, int status, int reason,
+                                         ASN1_TIME *revtime, ASN1_TIME *thisupd, ASN1_TIME *nextupd)
+{
+	return OCSP_basic_add1_status(bs, cid, status, reason, revtime, thisupd, nextupd);
+}
+
+int X_OCSP_basic_sign(OCSP_BASICRESP *bs, X509 *signer, EVP_PKEY *key,
+                       const EVP_MD *dgst, STACK_OF(X509) *certs, unsigned long flags)
+{
+	return OCSP_basic_sign(bs, signer, key, dgst, certs, flags);
+}
+
+OCSP_RESPONSE *X_OCSP_response_create(int status, OCSP_BASICRESP *bs)
+{
+	return OCSP_response_create(status, bs);
+}
+
+void X_OCSP_response_free(OCSP_RESPONSE *r)
+{
+	OCSP_RESPONSE_free(r);
+}
+
+int X_i2d_OCSP_RESPONSE(OCSP_RESPONSE *r, unsigned char **out)
+{
+	return i2d_OCSP_RESPONSE(r, out);
+}
+
+OCSP_RESPONSE *X_d2i_OCSP_RESPONSE(OCSP_RESPONSE **r, const unsigned char **ppin, long len)
+{
+	return d2i_OCSP_RESPONSE(r, ppin, len);
+}
+
+int X_OCSP_resp_find_status(OCSP_BASICRESP *bs, OCSP_CERTID *id, int *status,
+                            int *reason, ASN1_TIME **revtime,
+                            ASN1_TIME **thisupd, ASN1_TIME **nextupd)
+{
+	return OCSP_resp_find_status(bs, id, status, reason, revtime, thisupd, nextupd);
+}
+
+int X_OCSP_response_status(OCSP_RESPONSE *r)
+{
+	return OCSP_response_status(r);
+}
+
+OCSP_BASICRESP *X_OCSP_response_get1_basic(OCSP_RESPONSE *r)
+{
+	return OCSP_response_get1_basic(r);
+}
+
+/* PKCS8 helpers */
+PKCS8_PRIV_KEY_INFO *X_EVP_PKEY2PKCS8(EVP_PKEY *pkey)
+{
+	return EVP_PKEY2PKCS8(pkey);
+}
+
+void X_PKCS8_PRIV_KEY_INFO_free(PKCS8_PRIV_KEY_INFO *p8)
+{
+	PKCS8_PRIV_KEY_INFO_free(p8);
+}
+
+int X_i2d_PKCS8_PRIV_KEY_INFO_bio(BIO *bio, PKCS8_PRIV_KEY_INFO *p8)
+{
+	return i2d_PKCS8_PRIV_KEY_INFO_bio(bio, p8);
 }

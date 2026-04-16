@@ -33,6 +33,7 @@
 #include <openssl/ssl.h>
 #include <openssl/kdf.h>
 #include <openssl/params.h>
+#include <openssl/ocsp.h>
 
 // SM4 兼容层（Tongsuo 8.5.0+）
 // 使用内部头文件 crypto/sm4.h 中的定义
@@ -326,5 +327,28 @@ extern void X_init_crypto_thunks(void);
 extern void X_set_ssl_verify_thunk(SSL_verify_cb_fn thunk);
 extern void X_set_ssl_ctx_verify_thunk(SSL_CTX_verify_cb_fn thunk);
 extern void X_set_ticket_key_thunk(SSL_CTX_tlsext_ticket_key_cb_fn thunk);
+
+/* OCSP methods */
+extern OCSP_CERTID *X_OCSP_cert_to_id(const EVP_MD *dgst, const X509 *subject, const X509 *issuer);
+extern OCSP_BASICRESP *X_OCSP_BASICRESP_new(void);
+extern void X_OCSP_BASICRESP_free(OCSP_BASICRESP *bs);
+extern OCSP_SINGLERESP *X_OCSP_basic_add1_status(OCSP_BASICRESP *bs, OCSP_CERTID *cid, int status, int reason,
+                                                  ASN1_TIME *revtime, ASN1_TIME *thisupd, ASN1_TIME *nextupd);
+extern int X_OCSP_basic_sign(OCSP_BASICRESP *bs, X509 *signer, EVP_PKEY *key,
+                             const EVP_MD *dgst, STACK_OF(X509) *certs, unsigned long flags);
+extern OCSP_RESPONSE *X_OCSP_response_create(int status, OCSP_BASICRESP *bs);
+extern void X_OCSP_response_free(OCSP_RESPONSE *r);
+extern int X_i2d_OCSP_RESPONSE(OCSP_RESPONSE *r, unsigned char **out);
+extern OCSP_RESPONSE *X_d2i_OCSP_RESPONSE(OCSP_RESPONSE **r, const unsigned char **ppin, long len);
+extern int X_OCSP_resp_find_status(OCSP_BASICRESP *bs, OCSP_CERTID *id, int *status,
+                                   int *reason, ASN1_TIME **revtime,
+                                   ASN1_TIME **thisupd, ASN1_TIME **nextupd);
+extern int X_OCSP_response_status(OCSP_RESPONSE *r);
+extern OCSP_BASICRESP *X_OCSP_response_get1_basic(OCSP_RESPONSE *r);
+
+/* PKCS8 helpers */
+extern PKCS8_PRIV_KEY_INFO *X_EVP_PKEY2PKCS8(EVP_PKEY *pkey);
+extern void X_PKCS8_PRIV_KEY_INFO_free(PKCS8_PRIV_KEY_INFO *p8);
+extern int X_i2d_PKCS8_PRIV_KEY_INFO_bio(BIO *bio, PKCS8_PRIV_KEY_INFO *p8);
 
 #endif /* TONGSUO_GO_SDK_CRYPTO_SHIM_H */

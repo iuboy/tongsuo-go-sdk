@@ -851,3 +851,87 @@ func TestMarshalEd25519(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestMarshalPKCS8PrivateKeyDER(t *testing.T) {
+	t.Parallel()
+
+	t.Run("RSA", func(t *testing.T) {
+		t.Parallel()
+		key, err := crypto.GenerateRSAKey(2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		der, err := key.MarshalPKCS8PrivateKeyDER()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		parsed, err := x509.ParsePKCS8PrivateKey(der)
+		if err != nil {
+			t.Fatalf("Go stdlib failed to parse PKCS8 DER: %v", err)
+		}
+		if _, ok := parsed.(*rsa.PrivateKey); !ok {
+			t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+		}
+	})
+
+	t.Run("EC", func(t *testing.T) {
+		t.Parallel()
+		key, err := crypto.GenerateECKey(crypto.Prime256v1)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		der, err := key.MarshalPKCS8PrivateKeyDER()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		parsed, err := x509.ParsePKCS8PrivateKey(der)
+		if err != nil {
+			t.Fatalf("Go stdlib failed to parse PKCS8 DER: %v", err)
+		}
+		if _, ok := parsed.(*ecdsa.PrivateKey); !ok {
+			t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
+		}
+	})
+
+	t.Run("SM2", func(t *testing.T) {
+		t.Parallel()
+		key, err := crypto.GenerateECKey(crypto.SM2Curve)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		der, err := key.MarshalPKCS8PrivateKeyDER()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(der) == 0 {
+			t.Fatal("empty DER output")
+		}
+	})
+
+	t.Run("Ed25519", func(t *testing.T) {
+		t.Parallel()
+		if !crypto.SupportEd25519() {
+			t.SkipNow()
+		}
+		key, err := crypto.GenerateED25519Key()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		der, err := key.MarshalPKCS8PrivateKeyDER()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		parsed, err := x509.ParsePKCS8PrivateKey(der)
+		if err != nil {
+			t.Fatalf("Go stdlib failed to parse PKCS8 DER: %v", err)
+		}
+		_ = parsed
+	})
+}

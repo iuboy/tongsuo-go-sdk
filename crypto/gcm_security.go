@@ -19,7 +19,6 @@ import "C"
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"runtime"
 	"sync"
@@ -44,21 +43,26 @@ import (
 // - 每个加密操作必须使用唯一的IV
 // - 推荐使用随机IV或计数器IV
 type GCMSecurityContext struct {
-	mu          sync.RWMutex
-	ivHistory   map[string]struct{} // 使用 struct{} 值节省内存
-	ivOrder     []string          // 顺序记录，用于调试
-	maxHistory  int
-	contextID   string
-	totalCount  int64
+	mu         sync.RWMutex
+	ivHistory  map[string]struct{} // 使用 struct{} 值节省内存
+	maxHistory int
+	contextID  string
+	totalCount int64
 }
 
 // gcmSecurityManager 全局GCM安全管理器
+//
+// 安全限制：
+// - 最大上下文数量由 gcmMaxContexts 控制（默认 1024）
+// - 超过限制后拒绝创建新上下文，防止 DoS 攻击
 var gcmSecurityManager = struct {
 	sync.RWMutex
 	contexts map[string]*GCMSecurityContext
 }{
 	contexts: make(map[string]*GCMSecurityContext),
 }
+
+const gcmMaxContexts = 1024
 
 // NewGCMSecurityContext 创建新的GCM安全上下文
 //
@@ -91,10 +95,9 @@ func NewGCMSecurityContext(contextID string, maxHistory int) *GCMSecurityContext
 	}
 
 	return &GCMSecurityContext{
-		ivHistory:   make(map[string]struct{}, maxHistory/10),
-		ivOrder:     make([]string, 0, maxHistory),
-		maxHistory:  maxHistory,
-		contextID:   contextID,
+		ivHistory:  make(map[string]struct{}, maxHistory/10),
+		maxHistory: maxHistory,
+		contextID:  contextID,
 	}
 }
 
@@ -113,6 +116,15 @@ func GetGCMSecurityContext(contextID string) *GCMSecurityContext {
 
 	ctx, exists := gcmSecurityManager.contexts[contextID]
 	if !exists {
+		if len(gcmSecurityManager.contexts) >= gcmMaxContexts {
+			// 超过最大上下文数，返回错误上下文（所有操作会失败）
+			// 防止通过创建大量上下文耗尽内存
+			return &GCMSecurityContext{
+				ivHistory:  make(map[string]struct{}),
+				maxHistory: 0,
+				contextID:  "",
+			}
+		}
 		ctx = NewGCMSecurityContext(contextID, 10000) // 默认保留10000个IV
 		gcmSecurityManager.contexts[contextID] = ctx
 	}
@@ -140,14 +152,14 @@ func (ctx *GCMSecurityContext) checkAndRecordIV(iv []byte) error {
 		return fmt.Errorf("GCM IV too short: %d bytes (minimum 12 per NIST SP 800-38D)", len(iv))
 	}
 
-	// 将IV转换为十六进制字符串作为key
-	ivStr := hex.EncodeToString(iv)
+	// 直接使用 IV 字节作为 map key，避免 hex 编码的性能和内存开销
+	ivKey := string(iv)
 
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 
 	// 检查IV是否已被使用
-	if _, exists := ctx.ivHistory[ivStr]; exists {
+	if _, exists := ctx.ivHistory[ivKey]; exists {
 		// 注意：不泄露 IV 值，仅返回通用错误（C-01 修复）
 		return fmt.Errorf("GCM IV reuse detected - critical security failure! Context: %s",
 			ctx.contextID)
@@ -162,8 +174,7 @@ func (ctx *GCMSecurityContext) checkAndRecordIV(iv []byte) error {
 	}
 
 	// 记录此IV
-	ctx.ivHistory[ivStr] = struct{}{}
-	ctx.ivOrder = append(ctx.ivOrder, ivStr)
+	ctx.ivHistory[ivKey] = struct{}{}
 	ctx.totalCount++
 
 	return nil
@@ -181,7 +192,6 @@ func (ctx *GCMSecurityContext) ClearIVHistory() {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	ctx.ivHistory = make(map[string]struct{})
-	ctx.ivOrder = ctx.ivOrder[:0]
 }
 
 // GetIVHistorySize 获取当前IV历史记录数量
