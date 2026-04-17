@@ -45,9 +45,9 @@ var eia3TestVectors = []eia3TestCase{
 		expected: "89a58b47",
 	},
 	{
-		name:     "3GPP_EIA3_Test3",
-		key:      "c9e6cec4607c72db000aefa88385ab0a",
-		iv:       "a94059da54",
+		name: "3GPP_EIA3_Test3",
+		key:  "c9e6cec4607c72db000aefa88385ab0a",
+		iv:   "a94059da54",
 		input: "983b41d47d780c9e1ad11d7eb70391b1" +
 			"de0b35da2dc62f83e7b78d6306ca0ea0" +
 			"7e941b7be91348f9fcb170e2217fecd9" +
@@ -56,9 +56,9 @@ var eia3TestVectors = []eia3TestCase{
 		expected: "24a842b3",
 	},
 	{
-		name:     "3GPP_EIA3_Test4",
-		key:      "c8a48262d0c2e2bac4b96ef77e80ca59",
-		iv:       "0509785084",
+		name: "3GPP_EIA3_Test4",
+		key:  "c8a48262d0c2e2bac4b96ef77e80ca59",
+		iv:   "0509785084",
 		input: "b546430bf87b4f1ee834704cd6951c36" +
 			"e26f108cf731788f48dc34f1678c0522" +
 			"1c8fa7ff2f39f477e7e49ef60a4ec2c3" +
@@ -79,9 +79,9 @@ var eia3TestVectors = []eia3TestCase{
 		expected: "039532e1",
 	},
 	{
-		name:     "3GPP_EIA3_Test5",
-		key:      "6b8b08ee79e0b5982d6d128ea9f220cb",
-		iv:       "561eb2dde0",
+		name: "3GPP_EIA3_Test5",
+		key:  "6b8b08ee79e0b5982d6d128ea9f220cb",
+		iv:   "561eb2dde0",
 		input: "5bad724710ba1c56d5a315f8d40f6e09" +
 			"3780be8e8de07b6992432018e08ed96a" +
 			"5734af8bad8a575d3a1f162f85045cc7" +

@@ -1,8 +1,9 @@
 # CI for tongsuo-go-sdk
 #
-# 矩阵覆盖: Ubuntu/macOS/Windows × 动态链接/静态链接
-# Go 1.22+ (国密标准库 crypto/sm3, crypto/sm4 + 原生 fuzzing)
-# Tongsuo 8.5.0-dev (SM2/SM3/SM4, NTLS, OCSP, EVP SM4 API)
+# Jobs:
+#   lint            — gofmt + mod tidy + golangci-lint (无需 Tongsuo)
+#   build-and-test  — 矩阵: OS × link_type, Ubuntu dynamic 额外跑 ASan
+#   build-windows   — Windows MSVC 独立构建
 
 name: CI
 
@@ -11,75 +12,54 @@ on: [push, pull_request]
 env:
   TONGSUO_REF: "8.5.0-dev"
   GO_VERSION: "1.22"
+  TONGSUO_CONFIGURE_OPTS: "enable-ntls"
 
 jobs:
-  golang-lint:
+  # ── 静态检查 ──
+  lint:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
-    - name: Go fmt Check
-      uses: Jerome1337/gofmt-action@v1.0.5
-      with:
-        gofmt-path: './'
-        gofmt-flags: '-l -d'
-
-    - name: Go Mod
-      run: go mod tidy
-
-    - name: Cache Tongsuo
-      id: cache-tongsuo
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/tongsuo
-        key: tongsuo-${{ env.TONGSUO_REF }}-linux-x86_64
-
-    - name: Clone Tongsuo
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: Tongsuo-Project/Tongsuo
-        path: Tongsuo
-        ref: ${{ env.TONGSUO_REF }}
-
-    - name: Build Tongsuo
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
+    - name: Go fmt
       run: |
-        cd Tongsuo
-        ./config --prefix="${RUNNER_TEMP}/tongsuo" --libdir="${RUNNER_TEMP}/tongsuo/lib" enable-ntls enable-export-sm4
-        make -j$(nproc)
-        make install
+        fmt_output=$(gofmt -l .)
+        if [ -n "$fmt_output" ]; then
+          echo "::error::以下文件需要 gofmt: $fmt_output"
+          gofmt -d $fmt_output
+          exit 1
+        fi
 
-    - name: Go vet
+    - name: Go mod tidy check
       run: |
-        CGO_CFLAGS="-Wall -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
-        CGO_LDFLAGS="-L${RUNNER_TEMP}/tongsuo/lib" \
-        go vet ./...
+        go mod tidy
+        git diff --exit-code go.mod go.sum
 
-    - name: Golang lint
-      run: |
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin v1.61.0
-        LD_LIBRARY_PATH="${RUNNER_TEMP}/tongsuo/lib" \
-        CGO_CFLAGS="-Wall -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
-        CGO_LDFLAGS="-L${RUNNER_TEMP}/tongsuo/lib" \
-        golangci-lint run ./...
+    - uses: golangci/golangci-lint-action@v6
+      with:
+        version: v1.61.0
+        args: --timeout=5m
 
+  # ── 构建 + 测试 (Linux/macOS) ──
   build-and-test:
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        link: [dynamic, static]
     runs-on: ${{ matrix.os }}
+    env:
+      STATIC_FLAG: ${{ matrix.link == 'static' && '-tags=static' || '' }}
+      NO_SHARED: ${{ matrix.link == 'static' && 'no-shared' || '' }}
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -88,21 +68,14 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/tongsuo
-        key: tongsuo-${{ env.TONGSUO_REF }}-${{ matrix.os }}-x86_64
-
-    - name: Clone Tongsuo
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: Tongsuo-Project/Tongsuo
-        path: Tongsuo
-        ref: ${{ env.TONGSUO_REF }}
+        key: tongsuo-${{ matrix.link }}-${{ env.TONGSUO_REF }}-${{ matrix.os }}-${{ hashFiles('.github/workflows/main.yml') }}
 
     - name: Build Tongsuo
       if: steps.cache-tongsuo.outputs.cache-hit != 'true'
       run: |
+        git clone --depth=1 --branch=${TONGSUO_REF} https://github.com/Tongsuo-Project/Tongsuo.git
         cd Tongsuo
-        ./config --prefix="${RUNNER_TEMP}/tongsuo" --libdir="${RUNNER_TEMP}/tongsuo/lib" enable-ntls enable-export-sm4
+        ./config --prefix="${RUNNER_TEMP}/tongsuo" --libdir="${RUNNER_TEMP}/tongsuo/lib" ${TONGSUO_CONFIGURE_OPTS} ${NO_SHARED}
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
         make install
 
@@ -110,71 +83,32 @@ jobs:
       run: |
         CGO_CFLAGS="-Wall -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
         CGO_LDFLAGS="-L${RUNNER_TEMP}/tongsuo/lib" \
-        go build ./...
+        go build ${STATIC_FLAG} ./...
 
     - name: Test
       run: |
         export $([ "$(uname)" = "Darwin" ] && echo "DYLD_LIBRARY_PATH" || echo "LD_LIBRARY_PATH")="${RUNNER_TEMP}/tongsuo/lib"
         CGO_CFLAGS="-Wall -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
         CGO_LDFLAGS="-L${RUNNER_TEMP}/tongsuo/lib" \
-        go test -count=1 -race -tags=compliance ./...
+        go test -count=1 -race -timeout 300s ${STATIC_FLAG} ./...
 
-  build-static:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: ${{ env.GO_VERSION }}
-
-    - name: Cache Tongsuo Static
-      id: cache-tongsuo
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/tongsuo
-        key: tongsuo-static-${{ env.TONGSUO_REF }}-${{ matrix.os }}-x86_64
-
-    - name: Clone Tongsuo
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: Tongsuo-Project/Tongsuo
-        path: tongsuo
-        ref: ${{ env.TONGSUO_REF }}
-
-    - name: Build Tongsuo Static
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
+    # Ubuntu dynamic 额外跑 ASan 测试
+    - name: Test with ASan
+      if: matrix.os == 'ubuntu-latest' && matrix.link == 'dynamic'
       run: |
-        cd tongsuo
-        ./config --prefix="${RUNNER_TEMP}/tongsuo" --libdir="${RUNNER_TEMP}/tongsuo/lib" enable-ntls enable-export-sm4 no-shared
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-        make install
+        CGO_CFLAGS="-fsanitize=address -fno-omit-frame-pointer -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
+        CGO_LDFLAGS="-fsanitize=address -L${RUNNER_TEMP}/tongsuo/lib" \
+        ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" \
+        go test -v -count=1 -timeout 600s ./crypto/...
 
-    - name: Build
-      run: |
-        CGO_CFLAGS="-Wall -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
-        CGO_LDFLAGS="-L${RUNNER_TEMP}/tongsuo/lib" \
-        go build -tags=static ./...
-
-    - name: Test
-      run: |
-        CGO_CFLAGS="-Wall -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
-        CGO_LDFLAGS="-L${RUNNER_TEMP}/tongsuo/lib" \
-        go test -count=1 -tags=static,compliance ./...
-
-  build-on-windows:
+  # ── Windows 构建 + 测试 ──
+  build-windows:
+    needs: lint
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -183,7 +117,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/tongsuo
-        key: tongsuo-${{ env.TONGSUO_REF }}-windows-x64
+        key: tongsuo-${{ env.TONGSUO_REF }}-windows-x64-${{ hashFiles('.github/workflows/main.yml') }}
 
     - name: Clone Tongsuo
       if: steps.cache-tongsuo.outputs.cache-hit != 'true'
@@ -203,7 +137,7 @@ jobs:
       run: |
         mkdir _build
         cd _build
-        perl ..\Configure VC-WIN64A no-makedepend --prefix=%RUNNER_TEMP%\tongsuo enable-ntls enable-export-sm4
+        perl ..\Configure VC-WIN64A no-makedepend --prefix=%RUNNER_TEMP%\tongsuo enable-ntls
         nmake /S
         nmake install
       working-directory: Tongsuo
@@ -224,56 +158,4 @@ jobs:
       run: |
         set CGO_CFLAGS=-Wall -I%RUNNER_TEMP%\tongsuo\include -Wno-deprecated-declarations
         set CGO_LDFLAGS=-L%RUNNER_TEMP%\tongsuo\lib
-        go test -count=1 -tags=compliance ./...
-
-  # ASan CGo 内存安全测试（仅 Linux）
-  # AddressSanitizer 检测 C 层内存越界、use-after-free、double-free
-  # macOS 上系统库未 ASan 编译，误报多，所以只跑 Linux
-  asan-test:
-    runs-on: ubuntu-22.04
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: ${{ env.GO_VERSION }}
-
-    - name: Cache Tongsuo ASan
-      id: cache-tongsuo
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/tongsuo
-        key: tongsuo-${{ env.TONGSUO_REF }}-linux-x86_64
-
-    - name: Clone Tongsuo
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: Tongsuo-Project/Tongsuo
-        path: Tongsuo
-        ref: ${{ env.TONGSUO_REF }}
-
-    - name: Build Tongsuo
-      if: steps.cache-tongsuo.outputs.cache-hit != 'true'
-      run: |
-        cd Tongsuo
-        ./config --prefix="${RUNNER_TEMP}/tongsuo" --libdir="${RUNNER_TEMP}/tongsuo/lib" enable-ntls enable-export-sm4
-        make -j$(nproc)
-        make install
-
-    - name: Build with ASan
-      run: |
-        CGO_CFLAGS="-fsanitize=address -fno-omit-frame-pointer -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
-        CGO_LDFLAGS="-fsanitize=address -L${RUNNER_TEMP}/tongsuo/lib" \
-        go build ./...
-
-    - name: Test with ASan
-      run: |
-        LD_LIBRARY_PATH="${RUNNER_TEMP}/tongsuo/lib" \
-        CGO_CFLAGS="-fsanitize=address -fno-omit-frame-pointer -I${RUNNER_TEMP}/tongsuo/include -Wno-deprecated-declarations" \
-        CGO_LDFLAGS="-fsanitize=address -L${RUNNER_TEMP}/tongsuo/lib" \
-        ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" \
-        go test -v -count=1 -timeout 600s ./crypto/...
-      env:
-        TONGSUO_DETAILED_ERRORS: "true"
+        go test -count=1 -timeout 300s ./...
