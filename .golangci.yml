@@ -1,40 +1,56 @@
 linters:
   enable-all: true
   disable:
-    - ireturn
-    - gochecknoinits
-    - exhaustruct
-    - nlreturn
-    - err113           # 要求静态 error 变量，对 crypto 库过于严格
-    - godot            # 注释必须以句号结尾，中文注释不适用
-    - dupl             # 加密/解密代码天然相似，误报多
-    - dogsled          # 测试中多个空白标识符是正常的
-    - gocognit         # 认知复杂度，crypto 代码天然复杂
-    - nestif           # 嵌套 if 复杂度
-    - mirror           # 微优化建议，降低可读性
-    - asciicheck       # 非_ASCII 标识符检查
-    - dupword          # 注释中重复词检查（中文误报）
-    - gci              # import 分组（应单独格式化步骤）
-    - gofumpt          # 格式化（应单独格式化步骤）
-    - execinquery      # 已废弃
-    - gomnd            # 已废弃，被 mnd 替代
-    - copyloopvar      # 已废弃，Go 1.22+ 自动处理
-    - unparam          # 未使用参数（接口实现需要）
-    - unconvert        # 显式转换有时为了清晰度
-    - lll              # 行长度限制，crypto 代码难避免
-    - errcheck         # 测试中未检查返回值太多
+    # --- 风格类，对 crypto 库不适用 ---
+    - err113            # 要求静态 error 变量
+    - godot             # 注释必须以句号结尾（中文不适用）
+    - dupl              # 加密/解密代码天然相似
+    - dogsled           # 多个空白标识符
+    - gocognit          # 认知复杂度
+    - nestif            # 嵌套 if 复杂度
+    - mirror            # 微优化建议
+    - asciicheck        # 非 ASCII 标识符
+    - dupword           # 注释中重复词
+    - gci               # import 分组
+    - gofumpt           # 格式化
+    - gofmt             # 格式化
+    - wsl               # 空行/缩进风格
+    - whitespace        # 多余空行
+    - nlreturn          # return 前必须空行
+    - lll               # 行长度限制
+    - varnamelen        # 变量名太短
+    - testpackage       # 测试包命名
+    - paralleltest      # 缺少 t.Parallel()
+    - nonamedreturns    # 禁止命名返回值
+    - nakedret          # 裸 return
+    - funlen            # 函数长度
+    - cyclop            # 圈复杂度
+
+    # --- 代码质量类，crypto 库误报多 ---
+    - gocritic          # 各种代码建议（appendAssign 等）
+    - forcetypeassert   # 类型断言必须检查
+    - gochecknoglobals  # 禁止全局变量
+    - gosimple          # S1009 nil 检查建议
+    - gosmopolitan      # 中文 string 检查
+    - ineffassign       # 无效赋值
+    - intrange          # Go 1.22+ 整数 range
+    - mnd               # 魔术数字
+    - perfsprint        # fmt.Errorf → errors.New
+    - predeclared       # 参数名遮蔽预声明
+    - wrapcheck         # 错误必须 wrap
+    - unparam           # 未使用参数
+    - unconvert         # 不必要的类型转换
+    - errcheck          # 未检查返回值
+
+    # --- 已废弃 ---
+    - execinquery
+    - gomnd
+    - copyloopvar
+    - exportloopvar
 
 linters-settings:
-  cyclop:
-    max-complexity: 20
   interfacebloat:
     max: 11
-  lll:
-    line-length: 120
-  funlen:
-    lines: 120
-    statements: 80
-    ignore-comments: true
   depguard:
     rules:
       main:
