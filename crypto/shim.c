@@ -1339,6 +1339,25 @@ void X_EIA3_Final(void *ctx, unsigned char *out)
 	EIA3_Final(ctx, out);
 }
 
+/* X509 name check wrappers (accept const char* to match C.CString) */
+int X_X509_check_host(X509 *x, const char *chk, size_t chklen,
+                      unsigned int flags)
+{
+    return X509_check_host(x, chk, chklen, flags, NULL);
+}
+
+int X_X509_check_email(X509 *x, const char *chk, size_t chklen,
+                       unsigned int flags)
+{
+    return X509_check_email(x, chk, chklen, flags);
+}
+
+int X_X509_check_ip(X509 *x, const unsigned char *chk, size_t chklen,
+                    unsigned int flags)
+{
+    return X509_check_ip(x, chk, chklen, flags);
+}
+
 /* ============================================================
  * OCSP Stapling helpers
  * These are macros in tls1.h, need C wrappers for CGo.

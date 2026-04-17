@@ -380,6 +380,14 @@ extern void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) 
 // SSL curve/group setting (macro wrapper)
 extern int X_SSL_CTX_set1_curves(SSL_CTX *ctx, const int *curves, size_t len);
 
+/* X509 name check wrappers (accept const char* to match C.CString) */
+extern int X_X509_check_host(X509 *x, const char *chk, size_t chklen,
+                              unsigned int flags);
+extern int X_X509_check_email(X509 *x, const char *chk, size_t chklen,
+                               unsigned int flags);
+extern int X_X509_check_ip(X509 *x, const unsigned char *chk, size_t chklen,
+                            unsigned int flags);
+
 // cgo.Handle ↔ void* helpers (avoids unsafe.Pointer vet false positive)
 extern void* X_cgo_handle_to_ptr(intptr_t h);
 extern intptr_t X_cgo_ptr_to_handle(void* p);
