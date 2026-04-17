@@ -66,7 +66,7 @@ func NewEncrypter(key, iv []byte) (cipher.Stream, error) {
 		return nil, fmt.Errorf("ZUC IV must be %d bytes, got %d", IVSize, len(iv))
 	}
 
-	cipher_, err := newZUCCipher()
+	cipher, err := newZUCCipher()
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func NewEncrypter(key, iv []byte) (cipher.Stream, error) {
 	kptr := (*C.uchar)(&key[0])
 	iptr := (*C.uchar)(&iv[0])
 
-	if C.EVP_EncryptInit_ex(ctx, cipher_.ptr, nil, kptr, iptr) != 1 {
+	if C.EVP_EncryptInit_ex(ctx, cipher.ptr, nil, kptr, iptr) != 1 {
 		return nil, fmt.Errorf("ZUC EncryptInit failed: %w", crypto.PopError())
 	}
 
@@ -119,7 +119,7 @@ func NewDecrypter(key, iv []byte) (cipher.Stream, error) {
 		return nil, fmt.Errorf("ZUC IV must be %d bytes, got %d", IVSize, len(iv))
 	}
 
-	cipher_, err := newZUCCipher()
+	cipher, err := newZUCCipher()
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func NewDecrypter(key, iv []byte) (cipher.Stream, error) {
 	kptr := (*C.uchar)(&key[0])
 	iptr := (*C.uchar)(&iv[0])
 
-	if C.EVP_DecryptInit_ex(ctx, cipher_.ptr, nil, kptr, iptr) != 1 {
+	if C.EVP_DecryptInit_ex(ctx, cipher.ptr, nil, kptr, iptr) != 1 {
 		return nil, fmt.Errorf("ZUC DecryptInit failed: %w", crypto.PopError())
 	}
 

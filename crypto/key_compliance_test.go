@@ -190,7 +190,8 @@ func TestAllKeyTypeWipe(t *testing.T) {
 			fn   func() (PrivateKey, error)
 		}{
 			name: "Ed25519",
-			fn:   func() (PrivateKey, error) { return GenerateED25519Key() },
+			fn:   GenerateED25519Key,
+
 		})
 	}
 

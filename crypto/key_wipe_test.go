@@ -16,6 +16,7 @@ package crypto
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -281,8 +282,8 @@ func TestRSABasicCryptoOperations(t *testing.T) {
 	})
 }
 
-// TestRSA签名和验证 测试RSA签名功能
-func TestRSA签名和验证(t *testing.T) {
+// TestRSASignAndVerify 测试RSA签名功能
+func TestRSASignAndVerify(t *testing.T) {
 	t.Run("sign and verify", func(t *testing.T) {
 		privateKey, err := GenerateRSAKey(2048)
 		if err != nil {
@@ -403,5 +404,5 @@ func BenchmarkKeyWipe(b *testing.B) {
 
 // Helper function
 func contains(s, substr string) bool {
-	return bytes.Contains([]byte(s), []byte(substr))
+	return strings.Contains(s, substr)
 }

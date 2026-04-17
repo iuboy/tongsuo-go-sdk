@@ -309,7 +309,6 @@ func TestNTLS(t *testing.T) {
 	}
 
 	for _, item := range cases {
-		item := item
 		t.Run(item.cipher, func(t *testing.T) {
 			t.Parallel()
 
@@ -951,7 +950,6 @@ func TestSessionReuse(t *testing.T) {
 		ts.SessionCacheServer,
 		ts.SessionCacheBoth,
 	} {
-		cacheMode := cacheMode
 		t.Run(fmt.Sprintf("cacheMode: %d", cacheMode), func(t *testing.T) {
 			t.Parallel()
 
@@ -1218,7 +1216,6 @@ func TestTLSv13SMCipher(t *testing.T) {
 	testCertDir := "test/certs"
 
 	for _, cipher := range ciphers {
-		cipher := cipher
 		t.Run(cipher, func(t *testing.T) {
 			t.Parallel()
 			// Run server

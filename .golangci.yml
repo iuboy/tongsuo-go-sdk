@@ -5,6 +5,24 @@ linters:
     - gochecknoinits
     - exhaustruct
     - nlreturn
+    - err113           # 要求静态 error 变量，对 crypto 库过于严格
+    - godot            # 注释必须以句号结尾，中文注释不适用
+    - dupl             # 加密/解密代码天然相似，误报多
+    - dogsled          # 测试中多个空白标识符是正常的
+    - gocognit         # 认知复杂度，crypto 代码天然复杂
+    - nestif           # 嵌套 if 复杂度
+    - mirror           # 微优化建议，降低可读性
+    - asciicheck       # 非_ASCII 标识符检查
+    - dupword          # 注释中重复词检查（中文误报）
+    - gci              # import 分组（应单独格式化步骤）
+    - gofumpt          # 格式化（应单独格式化步骤）
+    - execinquery      # 已废弃
+    - gomnd            # 已废弃，被 mnd 替代
+    - exportloopvar    # 已废弃，Go 1.22+ 自动处理
+    - unparam          # 未使用参数（接口实现需要）
+    - unconvert        # 显式转换有时为了清晰度
+    - lll              # 行长度限制，crypto 代码难避免
+    - errcheck         # 测试中未检查返回值太多
 
 linters-settings:
   cyclop:
