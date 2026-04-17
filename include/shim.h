@@ -375,4 +375,7 @@ extern void X_sk_X509_free(STACK_OF(X509) *sk);
 extern STACK_OF(X509) *X_X509_STORE_CTX_get0_chain(const X509_STORE_CTX *ctx);
 extern void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) *sk);
 
+// SSL curve/group setting (macro wrapper)
+extern int X_SSL_CTX_set1_curves(SSL_CTX *ctx, const int *curves, size_t len);
+
 #endif /* TONGSUO_GO_SDK_CRYPTO_SHIM_H */

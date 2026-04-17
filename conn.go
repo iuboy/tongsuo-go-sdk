@@ -442,15 +442,13 @@ func (c *Conn) shutdown() func() error {
 		return nil
 	}
 	if rv == 0 {
-		// The OpenSSL docs say that in this case, the shutdown is not
-		// finished, and we should call SSL_shutdown() a second time, if a
-		// bidirectional shutdown is going to be performed. Further, the
-		// output of SSL_get_error may be misleading, as an erroneous
-		// SSL_ERROR_SYSCALL may be flagged even though no error occurred.
-		// So, TODO: revisit bidrectional shutdown, possibly trying again.
-		// Note: some broken clients won't engage in bidirectional shutdown
-		// without tickling them to close by sending a TCP_FIN packet, or
-		// shutting down the write-side of the connection.
+		// 第一轮 shutdown 成功（已发送 close_notify），但对端尚未回复。
+		// 调用 SSL_shutdown 第二次以完成双向关闭。
+		// 根据 OpenSSL 文档，第二次调用如果返回 >0 表示双向关闭完成，
+		// 返回 <=0 表示对端未响应（常见于非规范客户端）。
+		// 第二次调用的 SSL_get_error 可能误报 SSL_ERROR_SYSCALL，
+		// 因此忽略第二次调用的错误，直接返回 nil。
+		C.SSL_shutdown(c.ssl)
 		return nil
 	}
 

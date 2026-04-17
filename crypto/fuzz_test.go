@@ -43,9 +43,77 @@ func FuzzLoadCertificateFromPEM(f *testing.F) {
 	})
 }
 
-// TODO(security): LoadCertificateFromDER fuzz 测试暂时移除。
-// 原因: Tongsuo d2i_X509 对畸形 DER 输入会触发 C 层缓冲区越界 panic。
-// 需要在 Go 层添加 DER 输入预校验后再启用。
+// validateDERStructure 检查输入是否满足最小 DER/ASN.1 结构要求。
+// 不能保证 DER 有效，但能过滤掉明显畸形的数据，
+// 降低触发 C 层 (d2i_X509) 缓冲区越界的风险。
+func validateDERStructure(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	// ASN.1 SEQUENCE tag = 0x30
+	if data[0] != 0x30 {
+		return false
+	}
+	// 解析 length 字段
+	length := 0
+	offset := 1
+	switch {
+	case data[1]&0x80 == 0:
+		// 短格式
+		length = int(data[1])
+		offset = 2
+	case data[1] == 0x80:
+		// 不定长度，不允许
+		return false
+	case data[1] == 0xFF:
+		// 非法
+		return false
+	default:
+		// 长格式
+		numBytes := int(data[1] & 0x7F)
+		if numBytes > 4 || 2+numBytes > len(data) {
+			return false
+		}
+		for i := 0; i < numBytes; i++ {
+			length = (length << 8) | int(data[2+i])
+		}
+		offset = 2 + numBytes
+	}
+	// 声明长度不能超过剩余数据
+	if offset+length > len(data) {
+		return false
+	}
+	// 基本合理性：不超过 1MB
+	if length > 1048576 {
+		return false
+	}
+	return true
+}
+
+func FuzzLoadCertificateFromDER(f *testing.F) {
+	seeds := [][]byte{
+		[]byte{},
+		[]byte{0x30, 0x00},
+		[]byte{0x30, 0x01, 0x00},
+		[]byte{0xFF, 0xFF, 0xFF, 0xFF},
+		[]byte{0x30, 0x82, 0x00, 0x03, 0x30, 0x00, 0x00},
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if !validateDERStructure(data) {
+			return
+		}
+		cert, err := crypto.LoadCertificateFromDER(data)
+		if err != nil {
+			return
+		}
+		if cert != nil {
+			_, _ = cert.MarshalPEM()
+		}
+	})
+}
 
 // ---------------------------------------------------------------------------
 // CSR

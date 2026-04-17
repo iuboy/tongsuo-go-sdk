@@ -180,10 +180,7 @@ func NewCtx() (*Ctx, error) {
 // 配置内容:
 //   - TLS 1.3 协议版本
 //   - SM 密码套件: TLS_SM4_GCM_SM3 + TLS_SM4_CCM_SM3
-//
-// TODO: 确认 Tongsuo 是否提供 SSL_CTX_set1_curves 或等价 API，
-// 显式设置 SM2 曲线 (curve ID 41) 到 supported_groups 扩展中。
-// 当前依赖密码套件自动协商曲线，某些场景可能回退到 P-256。
+//   - SM2 曲线 (NID_sm2 = 1172) 设置到 supported_groups 扩展
 //
 // 调用方需要额外加载 SM2 证书和私钥 (UseCertificate + UsePrivateKey)。
 func NewTLS13SMCtx() (*Ctx, error) {
@@ -193,6 +190,12 @@ func NewTLS13SMCtx() (*Ctx, error) {
 	}
 	if err := ctx.SetCipherSuites(SMCipherSuites); err != nil {
 		return nil, fmt.Errorf("failed to set SM cipher suites: %w", err)
+	}
+	// 显式设置 SM2 曲线到 supported_groups，防止回退到 P-256
+	// NID_sm2 = 1172 (Tongsuo/OpenSSL obj_mac.h)
+	sm2Curve := C.int(1172)
+	if C.X_SSL_CTX_set1_curves(ctx.ctx, &sm2Curve, 1) != 1 {
+		return nil, fmt.Errorf("failed to set SM2 curve: %w", crypto.PopError())
 	}
 	return ctx, nil
 }

@@ -96,3 +96,10 @@ void X_init_crypto_thunks(void) {
 	X_set_ssl_ctx_verify_thunk(ssl_ctx_verify_cb_thunk);
 	X_set_ticket_key_thunk(ticket_key_cb_thunk);
 }
+
+// SSL_CTX_set1_curves 是宏 (SSL_CTX_ctrl)，CGo 无法直接调用。
+// 封装为函数，用于显式设置 TLS supported_groups。
+int X_SSL_CTX_set1_curves(SSL_CTX *ctx, const int *curves, size_t len)
+{
+	return SSL_CTX_set1_curves(ctx, (int *)curves, (size_t)len);
+}

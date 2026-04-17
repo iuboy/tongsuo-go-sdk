@@ -445,8 +445,11 @@ func LoadCertificateFromDER(derBytes []byte) (*Certificate, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// d2i_X509 会修改输入指针，需要用副本
-	buf := (*C.uchar)(unsafe.Pointer(&derBytes[0]))
+	// Copy to C memory to avoid Go 1.26 cgo pointer check
+	cBuf := C.CBytes(derBytes)
+	defer C.X_free(cBuf)
+
+	buf := (*C.uchar)(cBuf)
 	cert := C.d2i_X509(nil, &buf, C.long(len(derBytes)))
 	if cert == nil {
 		return nil, PopError()
