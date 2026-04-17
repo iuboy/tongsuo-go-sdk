@@ -1229,7 +1229,7 @@ func GenerateECKey(curve EllipticCurve) (PrivateKey, error) {
 // generateSM2Key 直接生成 SM2 密钥（Tongsuo 8.5）
 func generateSM2Key() (PrivateKey, error) {
 	// 直接使用 EVP_PKEY_SM2 类型生成密钥
-	paramCtx := C.X_EVP_PKEY_CTX_new_id(C.EVP_PKEY_SM2, nil)
+	paramCtx := C.X_EVP_PKEY_CTX_new_id(C.X_EVP_PKEY_SM2, nil)
 	if paramCtx == nil {
 		return nil, PopError()
 	}
