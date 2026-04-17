@@ -120,7 +120,11 @@ func VerifyCertificate(opts *VerifyOptions) (*VerificationResult, error) {
 		return nil, fmt.Errorf("failed to init X509_STORE_CTX: %w", PopError())
 	}
 
-	// Set untrusted intermediates
+	// Set untrusted intermediates.
+	//
+	// Ownership note: X509_STORE_CTX_set0_untrusted() borrows the stack
+	// pointer ("set0" = no refcount increment). X509_STORE_CTX_free()
+	// does NOT free the untrusted stack, so we must free it ourselves.
 	var untrustedStack *C.struct_stack_st_X509
 	if len(opts.Intermediates) > 0 {
 		untrustedStack = C.X_sk_X509_new_null()

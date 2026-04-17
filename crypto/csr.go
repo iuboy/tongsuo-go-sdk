@@ -11,8 +11,7 @@ import (
 
 // CertificateSigningRequest wraps an OpenSSL X509_REQ object.
 type CertificateSigningRequest struct {
-	req    *C.X509_REQ
-	pubKey PublicKey
+	req *C.X509_REQ
 }
 
 // NewCertificateSigningRequest creates a new PKCS#10 v1 CSR.
@@ -32,7 +31,7 @@ func NewCertificateSigningRequest(pubKey PublicKey) (*CertificateSigningRequest,
 		return nil, fmt.Errorf("failed to set CSR public key: %w", PopError())
 	}
 
-	csr := &CertificateSigningRequest{req: req, pubKey: pubKey}
+	csr := &CertificateSigningRequest{req: req}
 	runtime.SetFinalizer(csr, func(c *CertificateSigningRequest) {
 		C.X509_REQ_free(c.req)
 	})

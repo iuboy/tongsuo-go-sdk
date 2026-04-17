@@ -33,6 +33,12 @@ const (
 	DHSecurityLevelHigh
 )
 
+const (
+	dhSharedSecretLen  = 32
+	dhDefaultSaltLen   = 32
+	dhDefaultOutputLen = 32
+)
+
 // DHKDFConfig 定义密钥派生函数配置
 //
 // 符合标准：
@@ -194,35 +200,12 @@ func DeriveSharedSecretWithSecurityLevel(
 		kdfConfig = DefaultDHKDFConfig()
 	}
 
-	// ========== 密钥派生函数（KDF）安全检查 ==========
-	//
-	// 安全警告：直接使用原始DH共享秘密存在严重安全风险
-	//
-	// 攻击场景：
-	// 1. 小subgroup攻击：攻击者提供小阶元素，导致部分密钥泄露
-	// 2. 无效曲线攻击：提供不在曲线上的点，获取密钥信息
-	// 3. 密钥重用攻击：原始共享秘密直接用作密钥，易受攻击
-	//
-	// 防护措施：
-	// - KDF（密钥派生函数）可以均匀化共享秘密
-	// - KDF添加上下文绑定（盐值、info）
-	// - KDF防止密钥重用攻击
-	//
-	// 符合标准：
-	// - NIST SP 800-56C Recommendation 1: "Key derivation should be used"
-	// - NIST SP 800-56A Section 5.7.1.2: "ASecret rawKeying material should be cryptographically derived"
-	// - RFC 5869 (HKDF)
-	// - GB/T 37092-2018 (国密KDF)
-	//
+	// 强制使用 KDF：直接使用原始 DH 共享秘密存在严重安全风险
+	// （小subgroup攻击、无效曲线攻击、密钥重用攻击）
+	// 符合 NIST SP 800-56C Recommendation 1
 	if !kdfConfig.UseKDF {
-		// 所有安全级别都强制使用KDF
-		// 符合 NIST SP 800-56C Recommendation 1: "Key derivation should be used"
 		return nil, fmt.Errorf("KDF is required for security level %d: "+
-			"Using raw DH shared secrets is insecure and violates NIST SP 800-56C Recommendation 1. "+
-			"Security risks: "+
-			"1. Small subgroup attacks can leak partial key material, "+
-			"2. Invalid curve attacks can recover private keys, "+
-			"3. Key reuse attacks become feasible. "+
+			"Using raw DH shared secrets is insecure and violates NIST SP 800-56C. "+
 			"Solution: Set kdfConfig.UseKDF = true",
 			securityLevel)
 	}
@@ -336,6 +319,10 @@ func deriveECDH(private PrivateKey, public PublicKey) ([]byte, error) {
 //
 // 注意: GM/T 0003.3 定义了完整的 SM2 密钥交换协议（包含临时密钥对和多轮交换），
 // 这里实现的是基础 ECDH，适用于 TLS 握手等标准 ECDH 场景。
+//
+// 前置条件: EVP_PKEY_get1_EC_KEY 必须能从 SM2 EVP_PKEY 中提取 EC_KEY。
+// 当前 Tongsuo 的 SM2 内部使用 EC_KEY 表示，此路径可用。如果未来 Tongsuo
+// 迁移到 provider-based key management (类似 OpenSSL 3.x)，此函数可能需要重写。
 func deriveSM2ECDH(private PrivateKey, public PublicKey) ([]byte, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -367,7 +354,7 @@ func deriveSM2ECDH(private PrivateKey, public PublicKey) ([]byte, error) {
 
 	// ECDH_compute_key 输出长度为曲线字段大小的字节数 (SM2 = 32)
 	// 分配足够大的缓冲区
-	outLen := C.size_t(32)
+	outLen := C.size_t(dhSharedSecretLen)
 	outBuf := make([]byte, outLen)
 
 	// 计算 ECDH 共享秘密 (不使用 KDF，返回原始 x 坐标)
@@ -405,7 +392,7 @@ func deriveSM2ECDH(private PrivateKey, public PublicKey) ([]byte, error) {
 func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLevel) ([]byte, error) {
 	// 确定输出长度
 	// 默认使用SHA256输出长度（32字节）
-	outputLen := C.size_t(32)
+	outputLen := C.size_t(dhDefaultOutputLen)
 
 	// 确定摘要算法
 	var digest Method
@@ -432,7 +419,7 @@ func applyKDF(rawSecret []byte, config *DHKDFConfig, securityLevel DHSecurityLev
 	} else {
 		// 生成随机盐值（长度与摘要输出一致，RFC 5869 推荐）
 		// SHA-256 输出 32 字节，SM3 输出 32 字节
-		generatedSalt = make([]byte, 32)
+		generatedSalt = make([]byte, dhDefaultSaltLen)
 		if _, err := rand.Read(generatedSalt); err != nil {
 			return nil, fmt.Errorf("failed to generate random KDF salt: %w", err)
 		}
@@ -529,7 +516,7 @@ func DeriveSharedSecretBasic(private PrivateKey, public PublicKey) ([]byte, erro
 	kdfConfig := &DHKDFConfig{
 		UseKDF:    true,
 		KDFDigest: SHA256Method(),
-		KDFSalt:   make([]byte, 32), // 全零固定盐值（确定性，双方一致）
+		KDFSalt:   make([]byte, dhDefaultSaltLen), // 全零固定盐值（确定性，双方一致）
 		KDFInfo:   []byte("tongsuo-go-sdk-dh-basic-kdf"),
 	}
 
