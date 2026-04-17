@@ -41,12 +41,20 @@ linters:
     - unparam           # 未使用参数
     - unconvert         # 不必要的类型转换
     - errcheck          # 未检查返回值
+    - exhaustruct       # 结构体必须初始化所有字段
+    - gochecknoinits    # 禁止 init 函数
+    - revive            # 各种命名/参数规则
+    - stylecheck        # ST1003 包名下划线等
+
+    # --- 其他 ---
+    - ireturn           # 返回接口类型
+    - usetesting        # 建议用 t.TempDir() 等
+    - wastedassign      # 赋值后未使用再赋值
 
     # --- 已废弃 ---
     - execinquery
     - gomnd
     - copyloopvar
-    - exportloopvar
 
 linters-settings:
   interfacebloat:
