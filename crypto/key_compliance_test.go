@@ -191,7 +191,6 @@ func TestAllKeyTypeWipe(t *testing.T) {
 		}{
 			name: "Ed25519",
 			fn:   GenerateED25519Key,
-
 		})
 	}
 
