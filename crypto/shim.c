@@ -534,6 +534,13 @@ int X_EVP_PKEY_is_sm2(EVP_PKEY *pkey)
 	return EVP_PKEY_is_sm2(pkey);
 }
 
+int X_EVP_PKEY_set_alias_type(EVP_PKEY *pkey, int type)
+{
+	return EVP_PKEY_set_alias_type(pkey, type);
+}
+
+const int X_EVP_PKEY_SM2 = EVP_PKEY_SM2;
+
 size_t X_HMAC_size(const HMAC_CTX *e) {
 	return HMAC_size(e);
 }

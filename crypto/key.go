@@ -867,7 +867,7 @@ func LoadPrivateKeyFromPEM(pemBlock []byte) (PrivateKey, error) {
 	})
 
 	if C.X_EVP_PKEY_is_sm2(priKey.key) == 1 {
-		if C.EVP_PKEY_set_alias_type(priKey.key, C.EVP_PKEY_SM2) != 1 {
+		if C.X_EVP_PKEY_set_alias_type(priKey.key, C.X_EVP_PKEY_SM2) != 1 {
 			return nil, PopError()
 		}
 	}
@@ -948,7 +948,7 @@ func LoadPrivateKeyFromDER(derBlock []byte) (PrivateKey, error) {
 	})
 
 	if C.X_EVP_PKEY_is_sm2(p.key) == 1 {
-		if C.EVP_PKEY_set_alias_type(p.key, C.EVP_PKEY_SM2) != 1 {
+		if C.X_EVP_PKEY_set_alias_type(p.key, C.X_EVP_PKEY_SM2) != 1 {
 			return nil, PopError()
 		}
 	}

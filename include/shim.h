@@ -146,6 +146,8 @@ extern int X_EVP_PKEY_derive_set_peer(EVP_PKEY_CTX *ctx, EVP_PKEY *peer);
 extern int X_EVP_PKEY_derive(EVP_PKEY_CTX *ctx, unsigned char *key, size_t *pkeylen);
 extern int X_EVP_PKEY_CTX_set_ec_paramgen_curve_nid(EVP_PKEY_CTX *ctx, int nid);
 extern int X_EVP_PKEY_is_sm2(EVP_PKEY *pkey);
+extern int X_EVP_PKEY_set_alias_type(EVP_PKEY *pkey, int type);
+extern const int X_EVP_PKEY_SM2;
 extern int X_EVP_PKEY_CTX_set_rsa_keygen_bits(EVP_PKEY_CTX *ctx, int bits);
 extern int X_EVP_PKEY_CTX_set_rsa_keygen_pubexp(EVP_PKEY_CTX *ctx, BIGNUM *pubexp);
 
