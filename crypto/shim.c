@@ -1339,6 +1339,33 @@ void X_EIA3_Final(void *ctx, unsigned char *out)
 	EIA3_Final(ctx, out);
 }
 
+/* NTLS dual-certificate helpers (Tongsuo-specific, may not exist in all builds) */
+int X_SSL_CTX_use_sign_certificate(SSL_CTX *ctx, X509 *x)
+{
+    return SSL_CTX_use_sign_certificate(ctx, x);
+}
+
+int X_SSL_CTX_use_enc_certificate(SSL_CTX *ctx, X509 *x)
+{
+    return SSL_CTX_use_enc_certificate(ctx, x);
+}
+
+int X_SSL_CTX_use_sign_PrivateKey(SSL_CTX *ctx, EVP_PKEY *pkey)
+{
+    return SSL_CTX_use_sign_PrivateKey(ctx, pkey);
+}
+
+int X_SSL_CTX_use_enc_PrivateKey(SSL_CTX *ctx, EVP_PKEY *pkey)
+{
+    return SSL_CTX_use_enc_PrivateKey(ctx, pkey);
+}
+
+/* ZUC EEA3 cipher (Tongsuo-specific) */
+const EVP_CIPHER *X_EVP_eea3(void)
+{
+    return EVP_eea3();
+}
+
 /* X509 name check wrappers (accept const char* to match C.CString) */
 int X_X509_check_host(X509 *x, const char *chk, size_t chklen,
                       unsigned int flags)

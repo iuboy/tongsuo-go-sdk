@@ -39,7 +39,7 @@ type zucCipher struct {
 }
 
 func newZUCCipher() (*zucCipher, error) {
-	c := C.EVP_eea3()
+	c := C.X_EVP_eea3()
 	if c == nil {
 		return nil, fmt.Errorf("ZUC-128-EEA3 not available")
 	}

@@ -282,7 +282,7 @@ func (ctx *Ctx) UseSignCertificate(cert *crypto.Certificate) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ctx.cert = cert
-	if int(C.SSL_CTX_use_sign_certificate(ctx.ctx, (*C.X509)(cert.GetCert()))) != 1 {
+	if int(C.X_SSL_CTX_use_sign_certificate(ctx.ctx, (*C.X509)(cert.GetCert()))) != 1 {
 		return fmt.Errorf("failed to set sign cert: %w", crypto.PopError())
 	}
 	return nil
@@ -294,7 +294,7 @@ func (ctx *Ctx) UseEncryptCertificate(cert *crypto.Certificate) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ctx.encCert = cert
-	if int(C.SSL_CTX_use_enc_certificate(ctx.ctx, (*C.X509)(cert.GetCert()))) != 1 {
+	if int(C.X_SSL_CTX_use_enc_certificate(ctx.ctx, (*C.X509)(cert.GetCert()))) != 1 {
 		return fmt.Errorf("failed to set enc cert: %w", crypto.PopError())
 	}
 	return nil
@@ -332,7 +332,7 @@ func (ctx *Ctx) UseSignPrivateKey(key crypto.PrivateKey) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ctx.key = key
-	if int(C.SSL_CTX_use_sign_PrivateKey(ctx.ctx, (*C.EVP_PKEY)(key.EvpPKey()))) != 1 {
+	if int(C.X_SSL_CTX_use_sign_PrivateKey(ctx.ctx, (*C.EVP_PKEY)(key.EvpPKey()))) != 1 {
 		return fmt.Errorf("failed to set sign private key: %w", crypto.PopError())
 	}
 	return nil
@@ -344,7 +344,7 @@ func (ctx *Ctx) UseEncryptPrivateKey(key crypto.PrivateKey) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ctx.encKey = key
-	if int(C.SSL_CTX_use_enc_PrivateKey(ctx.ctx, (*C.EVP_PKEY)(key.EvpPKey()))) != 1 {
+	if int(C.X_SSL_CTX_use_enc_PrivateKey(ctx.ctx, (*C.EVP_PKEY)(key.EvpPKey()))) != 1 {
 		return fmt.Errorf("failed to set enc private key: %w", crypto.PopError())
 	}
 	return nil

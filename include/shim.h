@@ -380,6 +380,15 @@ extern void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) 
 // SSL curve/group setting (macro wrapper)
 extern int X_SSL_CTX_set1_curves(SSL_CTX *ctx, const int *curves, size_t len);
 
+/* NTLS dual-certificate helpers (Tongsuo-specific) */
+extern int X_SSL_CTX_use_sign_certificate(SSL_CTX *ctx, X509 *x);
+extern int X_SSL_CTX_use_enc_certificate(SSL_CTX *ctx, X509 *x);
+extern int X_SSL_CTX_use_sign_PrivateKey(SSL_CTX *ctx, EVP_PKEY *pkey);
+extern int X_SSL_CTX_use_enc_PrivateKey(SSL_CTX *ctx, EVP_PKEY *pkey);
+
+/* ZUC EEA3 cipher (Tongsuo-specific) */
+extern const EVP_CIPHER *X_EVP_eea3(void);
+
 /* X509 name check wrappers (accept const char* to match C.CString) */
 extern int X_X509_check_host(X509 *x, const char *chk, size_t chklen,
                               unsigned int flags);
