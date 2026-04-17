@@ -18,7 +18,7 @@ linters:
     - gofumpt          # 格式化（应单独格式化步骤）
     - execinquery      # 已废弃
     - gomnd            # 已废弃，被 mnd 替代
-    - exportloopvar    # 已废弃，Go 1.22+ 自动处理
+    - copyloopvar      # 已废弃，Go 1.22+ 自动处理
     - unparam          # 未使用参数（接口实现需要）
     - unconvert        # 显式转换有时为了清晰度
     - lll              # 行长度限制，crypto 代码难避免
