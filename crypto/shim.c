@@ -1291,49 +1291,69 @@ int X_BN_bn2bin(const BIGNUM *a, unsigned char *to)
 
 /* ============================================================
  * ZUC EIA3 authentication (GM/T 0001-2012 128-EIA3)
- * EIA3_CTX is opaque; internal header not installed,
- * so we forward-declare and use EIA3_ctx_size() for allocation.
+ * Uses EVP_MAC public API instead of internal EIA3_* functions,
+ * which are not exported on Linux/Windows Tongsuo builds.
  * ============================================================ */
 
-size_t X_EIA3_ctx_size(void)
-{
-	extern size_t EIA3_ctx_size(void);
-	return EIA3_ctx_size();
-}
+#include <openssl/params.h>
+#include <openssl/core_names.h>
+
+typedef struct {
+	EVP_MAC *mac;
+	EVP_MAC_CTX *mctx;
+} X_EIA3_CTX;
 
 void* X_EIA3_CTX_new(void)
 {
-	size_t sz = X_EIA3_ctx_size();
-	void *ctx = OPENSSL_malloc(sz);
-	if (ctx)
-		memset(ctx, 0, sz);
-	return ctx;
+	X_EIA3_CTX *c = OPENSSL_zalloc(sizeof(*c));
+	if (!c)
+		return NULL;
+	c->mac = EVP_MAC_fetch(NULL, "EIA3", NULL);
+	if (!c->mac) {
+		OPENSSL_free(c);
+		return NULL;
+	}
+	c->mctx = EVP_MAC_CTX_new(c->mac);
+	if (!c->mctx) {
+		EVP_MAC_free(c->mac);
+		OPENSSL_free(c);
+		return NULL;
+	}
+	return c;
 }
 
 void X_EIA3_CTX_free(void *ctx)
 {
-	if (ctx) {
-		OPENSSL_cleanse(ctx, X_EIA3_ctx_size());
-		OPENSSL_free(ctx);
+	X_EIA3_CTX *c = ctx;
+	if (c) {
+		EVP_MAC_CTX_free(c->mctx);
+		EVP_MAC_free(c->mac);
+		OPENSSL_free(c);
 	}
 }
 
 int X_EIA3_Init(void *ctx, const unsigned char *key, const unsigned char *iv)
 {
-	extern int EIA3_Init(void *, const unsigned char *, const unsigned char *);
-	return EIA3_Init(ctx, key, iv);
+	X_EIA3_CTX *c = ctx;
+	OSSL_PARAM params[3];
+	int n = 0;
+	params[n++] = OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_KEY,
+	                                                 (void *)key, 16);
+	params[n++] = OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_IV,
+	                                                 (void *)iv, 5);
+	params[n] = OSSL_PARAM_construct_end();
+	return EVP_MAC_init(c->mctx, key, 16, params);
 }
 
 int X_EIA3_Update(void *ctx, const unsigned char *inp, size_t len)
 {
-	extern int EIA3_Update(void *, const unsigned char *, size_t);
-	return EIA3_Update(ctx, inp, len);
+	return EVP_MAC_update(((X_EIA3_CTX *)ctx)->mctx, inp, len);
 }
 
 void X_EIA3_Final(void *ctx, unsigned char *out)
 {
-	extern void EIA3_Final(void *, unsigned char *);
-	EIA3_Final(ctx, out);
+	size_t outl = 0;
+	EVP_MAC_final(((X_EIA3_CTX *)ctx)->mctx, out, &outl, 4);
 }
 
 /* NTLS dual-certificate helpers (Tongsuo-specific, may not exist in all builds) */

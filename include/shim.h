@@ -404,7 +404,6 @@ extern intptr_t X_cgo_ptr_to_handle(void* p);
 /* ZUC EIA3 authentication (GM/T 0001-2012 128-EIA3) */
 #define EIA3_DIGEST_SIZE 4
 
-extern size_t X_EIA3_ctx_size(void);
 extern void* X_EIA3_CTX_new(void);
 extern void X_EIA3_CTX_free(void *ctx);
 extern int X_EIA3_Init(void *ctx, const unsigned char *key, const unsigned char *iv);
