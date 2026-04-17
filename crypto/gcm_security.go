@@ -252,8 +252,8 @@ func GCMEncrypt(key, plaintext, iv, aad []byte, securityCtx *GCMSecurityContext)
 	// 确定块大小（AES密钥长度）
 	blocksize := len(key) * 8
 
-	// 创建加密上下文
-	encCtx, err := NewGCMEncryptionCipherCtx(blocksize, key, nil)
+	// 创建加密上下文（传入 IV）
+	encCtx, err := NewGCMEncryptionCipherCtx(blocksize, key, iv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create GCM encryption context: %w", err)
 	}
@@ -329,8 +329,8 @@ func GCMDecrypt(key, ciphertext, tag, iv, aad []byte, securityCtx *GCMSecurityCo
 	// 确定块大小
 	blocksize := len(key) * 8
 
-	// 创建解密上下文
-	decCtx, err := NewGCMDecryptionCipherCtx(blocksize, key, nil)
+	// 创建解密上下文（传入 IV）
+	decCtx, err := NewGCMDecryptionCipherCtx(blocksize, key, iv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCM decryption context: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -64,10 +65,8 @@ var (
 // 使用 atomic.Bool 保证并发读写的线程安全
 var detailedErrors atomic.Bool
 
-// detailedErrorsLocked 标记是否已经锁定详细错误设置
-// 一旦通过 SetDetailedErrors 设置后，就不能再更改
-// 防止运行时被攻击者切换以泄露敏感信息
-var detailedErrorsLocked bool
+// setDetailedErrorsOnce 确保 SetDetailedErrors 只执行一次
+var setDetailedErrorsOnce sync.Once
 
 func init() {
 	detailedErrors.Store(os.Getenv("TONGSUO_DETAILED_ERRORS") == "true")
@@ -140,11 +139,9 @@ func PopError() error {
 // - 生产环境必须保持禁用状态
 // - 启用后可能泄露敏感实现信息
 func SetDetailedErrors(enabled bool) {
-	if detailedErrorsLocked {
-		return
-	}
-	detailedErrorsLocked = true
-	detailedErrors.Store(enabled)
+	setDetailedErrorsOnce.Do(func() {
+		detailedErrors.Store(enabled)
+	})
 }
 
 // IsDetailedErrorsEnabled 返回当前是否启用了详细错误

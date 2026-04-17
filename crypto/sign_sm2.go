@@ -4,6 +4,7 @@ package crypto
 import "C"
 import (
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -27,6 +28,9 @@ func init() {
 // signFunc 接收初始化好的 EVP_MD_CTX，执行实际的 sign_ctx 调用。
 // 返回值: 1=成功, <=0=失败。
 func signWithSM2MD(privKey PrivateKey, md *C.EVP_MD, signFunc func(*C.EVP_MD_CTX) C.int) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ctx := C.X_EVP_MD_CTX_new()
 	if ctx == nil {
 		return fmt.Errorf("failed to create MD_CTX: %w", PopError())

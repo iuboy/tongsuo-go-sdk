@@ -329,6 +329,9 @@ func (key *pKey) SignWithOptions(method Method, data []byte, options *SignOption
 		return nil, ErrNoKey
 	}
 
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ctx := C.X_EVP_MD_CTX_new()
 	defer C.X_EVP_MD_CTX_free(ctx)
 
@@ -457,6 +460,9 @@ func (key *pKey) VerifyWithOptions(method Method, data, sig []byte, options *Sig
 	if key.key == nil {
 		return ErrNoKey
 	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	ctx := C.X_EVP_MD_CTX_new()
 	defer C.X_EVP_MD_CTX_free(ctx)

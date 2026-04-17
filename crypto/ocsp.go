@@ -127,6 +127,9 @@ func CreateOCSPResponse(issuer *Certificate, privKey PrivateKey,
 	serial *big.Int, status int, thisUpdate, nextUpdate time.Time,
 	revokedAt time.Time) ([]byte, error) {
 
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if issuer == nil || issuer.x == nil {
 		return nil, fmt.Errorf("issuer certificate is nil: %w", ErrNilParameter)
 	}
@@ -226,6 +229,9 @@ func CreateOCSPResponse(issuer *Certificate, privKey PrivateKey,
 
 // ParseOCSPResponse 解析 DER 编码的 OCSP 响应
 func ParseOCSPResponse(der []byte) (*OCSPResponse, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if len(der) == 0 {
 		return nil, fmt.Errorf("empty OCSP response: %w", ErrNilParameter)
 	}

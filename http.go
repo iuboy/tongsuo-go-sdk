@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -136,47 +137,50 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("tongsuo: handshake: %w", err)
 	}
 
-	// 用标准库发送请求（在 TLS 连接上）
-	// clientConn 管理 Conn 的生命周期
-	cc := &clientConn{Conn: conn, tcpConn: tcpConn}
-	defer cc.Close()
-
-	// 读写 HTTP 需要用裸连接
-	// 标准 http 使用 bufio/httputil 更可靠
-	return sendRequest(cc, req)
-}
-
-// clientConn 包装 Tongsuo Conn 使其满足 HTTP 传输需求
-type clientConn struct {
-	*Conn
-	tcpConn net.Conn
-}
-
-func (c *clientConn) Close() error {
-	return c.Conn.Close()
-}
-
-// sendRequest 在 TLS 连接上发送 HTTP 请求并读取响应
-func sendRequest(conn net.Conn, req *http.Request) (*http.Response, error) {
-	// 直接写 HTTP/1.1 请求
+	// 发送 HTTP 请求
 	if err := req.Write(conn); err != nil {
+		conn.Close()
 		return nil, fmt.Errorf("tongsuo: write request: %w", err)
 	}
 
 	// 读取响应
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
+		conn.Close()
 		return nil, fmt.Errorf("tongsuo: read response: %w", err)
 	}
+
+	// 将连接生命周期绑定到 resp.Body
+	// 调用方读取完 Body 后必须调用 resp.Body.Close() 才会关闭底层连接
+	resp.Body = &responseBody{source: resp.Body, conn: conn}
 
 	return resp, nil
 }
 
+// responseBody 包装 http.Response.Body，在 Close 时关闭底层 TLS 连接。
+type responseBody struct {
+	source io.ReadCloser
+	conn   *Conn
+}
+
+func (b *responseBody) Read(p []byte) (int, error) {
+	return b.source.Read(p)
+}
+
+func (b *responseBody) Close() error {
+	err := b.source.Close()
+	b.conn.Close()
+	return err
+}
+
 // NewHTTPClient 创建使用 Tongsuo TLS 的 HTTP 客户端。
+// 默认启用服务器证书验证 (VerifyPeer)。
 //
 // 参数:
-//   - ctx: Tongsuo SSL 上下文
+//   - ctx: Tongsuo SSL 上下文（必须已配置 CA 证书）
 func NewHTTPClient(ctx *Ctx) *http.Client {
+	// 默认启用证书验证
+	ctx.SetVerify(VerifyPeer, nil)
 	return &http.Client{
 		Transport: &Transport{Ctx: ctx},
 	}
