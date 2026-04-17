@@ -1320,9 +1320,6 @@ void X_EIA3_CTX_free(void *ctx)
 
 int X_EIA3_Init(void *ctx, const unsigned char *key, const unsigned char *iv)
 {
-	/* EIA3_CTX is forward-declared; linker resolves the actual symbol.
-	 * The function prototype uses EIA3_CTX* but C allows void* to
-	 * any-pointer implicit conversion for function arguments. */
 	extern int EIA3_Init(void *, const unsigned char *, const unsigned char *);
 	return EIA3_Init(ctx, key, iv);
 }
