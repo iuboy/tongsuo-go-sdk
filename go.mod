@@ -1,3 +1,3 @@
 module github.com/tongsuo-project/tongsuo-go-sdk
 
-go 1.21
+go 1.22

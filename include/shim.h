@@ -378,4 +378,23 @@ extern void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) 
 // SSL curve/group setting (macro wrapper)
 extern int X_SSL_CTX_set1_curves(SSL_CTX *ctx, const int *curves, size_t len);
 
+// cgo.Handle ↔ void* helpers (avoids unsafe.Pointer vet false positive)
+extern void* X_cgo_handle_to_ptr(intptr_t h);
+extern intptr_t X_cgo_ptr_to_handle(void* p);
+
+/* ZUC EIA3 authentication (GM/T 0001-2012 128-EIA3) */
+#define EIA3_DIGEST_SIZE 4
+
+extern size_t X_EIA3_ctx_size(void);
+extern void* X_EIA3_CTX_new(void);
+extern void X_EIA3_CTX_free(void *ctx);
+extern int X_EIA3_Init(void *ctx, const unsigned char *key, const unsigned char *iv);
+extern int X_EIA3_Update(void *ctx, const unsigned char *inp, size_t len);
+extern void X_EIA3_Final(void *ctx, unsigned char *out);
+
+/* OCSP Stapling helpers (macros need C wrappers for CGo) */
+extern int X_SSL_set_tlsext_status_type(SSL *ssl, int type);
+extern int X_SSL_set_tlsext_status_ocsp_resp(SSL *ssl, const unsigned char *resp, size_t len);
+extern int X_SSL_get_tlsext_status_ocsp_resp(SSL *ssl, const unsigned char **resp);
+
 #endif /* TONGSUO_GO_SDK_CRYPTO_SHIM_H */

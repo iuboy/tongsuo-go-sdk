@@ -126,6 +126,7 @@ static int x_bio_create(BIO *b) {
 }
 
 static int x_bio_free(BIO *b) {
+	(void)b;
 	return 1;
 }
 
@@ -812,36 +813,18 @@ err:
 // 返回值：0 表示相等，非零表示不相等
 int X_CRYPTO_memcmp(const void *a, const void *b, size_t n)
 {
-	const unsigned char *ca = a;
-	const unsigned char *cb = b;
-	size_t i;
-	unsigned char ret = 0;
-
-	// OpenSSL 提供了 CRYPTO_memcmp 函数，它使用常量时间比较
-	// 这里直接使用它
 #if OPENSSL_VERSION_NUMBER >= 0x10000000L
 	return CRYPTO_memcmp(a, b, n);
 #else
-	// 回退实现 (对于旧版本 OpenSSL)
+	const unsigned char *ca = a;
+	const unsigned char *cb = b;
+	unsigned char ret = 0;
+	size_t i;
 	for (i = 0; i < n; i++) {
 		ret |= ca[i] ^ cb[i];
 	}
 	return ret;
 #endif
-}
-
-// SSL/TLS ticket key callback function
-// 这个函数由 Go 代码通过 export 导出
-static int ssl_ticket_key_cb(SSL *ssl,
-                             unsigned char *key_name,
-                             unsigned char *iv,
-                             EVP_CIPHER_CTX *ctx,
-                             HMAC_CTX *hctx,
-                             int enc)
-{
-	// 这个函数实际由 Go 实现
-	// 这里只是占位符
-	return 0;
 }
 
 // X_SSL_CTX_ticket_key_cb 导出函数指针给 Go 使用
@@ -1297,4 +1280,74 @@ void X_X509_STORE_CTX_set0_untrusted(X509_STORE_CTX *ctx, STACK_OF(X509) *sk)
 int X_BN_bn2bin(const BIGNUM *a, unsigned char *to)
 {
 	return BN_bn2bin(a, to);
+}
+
+/* ============================================================
+ * ZUC EIA3 authentication (GM/T 0001-2012 128-EIA3)
+ * EIA3_CTX is opaque; internal header not installed,
+ * so we forward-declare and use EIA3_ctx_size() for allocation.
+ * ============================================================ */
+
+size_t X_EIA3_ctx_size(void)
+{
+	extern size_t EIA3_ctx_size(void);
+	return EIA3_ctx_size();
+}
+
+void* X_EIA3_CTX_new(void)
+{
+	size_t sz = X_EIA3_ctx_size();
+	void *ctx = OPENSSL_malloc(sz);
+	if (ctx)
+		memset(ctx, 0, sz);
+	return ctx;
+}
+
+void X_EIA3_CTX_free(void *ctx)
+{
+	if (ctx) {
+		OPENSSL_cleanse(ctx, X_EIA3_ctx_size());
+		OPENSSL_free(ctx);
+	}
+}
+
+int X_EIA3_Init(void *ctx, const unsigned char *key, const unsigned char *iv)
+{
+	/* EIA3_CTX is forward-declared; linker resolves the actual symbol.
+	 * The function prototype uses EIA3_CTX* but C allows void* to
+	 * any-pointer implicit conversion for function arguments. */
+	extern int EIA3_Init(void *, const unsigned char *, const unsigned char *);
+	return EIA3_Init(ctx, key, iv);
+}
+
+int X_EIA3_Update(void *ctx, const unsigned char *inp, size_t len)
+{
+	extern int EIA3_Update(void *, const unsigned char *, size_t);
+	return EIA3_Update(ctx, inp, len);
+}
+
+void X_EIA3_Final(void *ctx, unsigned char *out)
+{
+	extern void EIA3_Final(void *, unsigned char *);
+	EIA3_Final(ctx, out);
+}
+
+/* ============================================================
+ * OCSP Stapling helpers
+ * These are macros in tls1.h, need C wrappers for CGo.
+ * ============================================================ */
+
+int X_SSL_set_tlsext_status_type(SSL *ssl, int type)
+{
+	return SSL_set_tlsext_status_type(ssl, type);
+}
+
+int X_SSL_set_tlsext_status_ocsp_resp(SSL *ssl, const unsigned char *resp, size_t len)
+{
+	return SSL_set_tlsext_status_ocsp_resp(ssl, (unsigned char *)resp, len);
+}
+
+int X_SSL_get_tlsext_status_ocsp_resp(SSL *ssl, const unsigned char **resp)
+{
+	return SSL_get_tlsext_status_ocsp_resp(ssl, resp);
 }

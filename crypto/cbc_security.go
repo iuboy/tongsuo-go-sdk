@@ -692,12 +692,18 @@ func (w *CBCSafeWrapper) macTagSize() int {
 	switch w.hmacDigest {
 	case DigestSHA256:
 		return 32
-	case DigestSHA224: return 28
-	case DigestSHA384: return 48
-	case DigestSHA512: return 64
-	case DigestSM3: return 32
-	case DigestSHA1: return 20
-	case DigestMD5: return 16
+	case DigestSHA224:
+		return 28
+	case DigestSHA384:
+		return 48
+	case DigestSHA512:
+		return 64
+	case DigestSM3:
+		return 32
+	case DigestSHA1:
+		return 20
+	case DigestMD5:
+		return 16
 	default:
 		return 32 // default to SHA256
 	}

@@ -17,6 +17,7 @@ import (
 	"crypto/cipher"
 	"fmt"
 	"runtime"
+	"unsafe"
 
 	"github.com/tongsuo-project/tongsuo-go-sdk/crypto"
 )
@@ -27,6 +28,9 @@ const (
 
 	// IVSize ZUC IV 长度 (5 字节)
 	IVSize = 5
+
+	// MACSize EIA3 MAC 长度 (4 字节 = 32 位)
+	MACSize = C.EIA3_DIGEST_SIZE
 )
 
 // zucCipher 封装 ZUC EVP_CIPHER 流密码
@@ -179,3 +183,105 @@ func Decrypt(key, iv, ciphertext []byte) ([]byte, error) {
 // Ensure interface compliance
 var _ cipher.Stream = (*zucEncrypter)(nil)
 var _ cipher.Stream = (*zucDecrypter)(nil)
+
+// ---------------------------------------------------------------------------
+// ZUC-128-EIA3 完整性认证算法 (GM/T 0001-2012)
+// ---------------------------------------------------------------------------
+
+// EIA3Authenticator ZUC-128-EIA3 完整性认证器
+//
+// GM/T 0001-2012 128-EIA3:
+//   - 认证算法，生成 4 字节 MAC (Message Authentication Code)
+//   - 密钥长度: 16 字节 (与 EEA3 相同)
+//   - IV 长度: 5 字节 (COUNT[4] + BEARER+DIR[1])
+//
+// 注意: Tongsuo 的 EIA3_Update 存在 keystream 位置重置问题，
+// 多次调用 Update 会产生不正确的 MAC。因此本实现采用内部缓冲，
+// 在 Final 时一次性调用 C 层的 EIA3_Update。
+//
+// 使用方式:
+//
+//	a, _ := zuc.NewEIA3Authenticator(key, iv)
+//	a.Update(data)
+//	mac, _ := a.Final()
+type EIA3Authenticator struct {
+	ctx  unsafe.Pointer
+	data []byte
+}
+
+// NewEIA3Authenticator 创建 EIA3 认证器
+func NewEIA3Authenticator(key, iv []byte) (*EIA3Authenticator, error) {
+	if len(key) != KeySize {
+		return nil, fmt.Errorf("EIA3 key must be %d bytes, got %d", KeySize, len(key))
+	}
+	if len(iv) != IVSize {
+		return nil, fmt.Errorf("EIA3 IV must be %d bytes, got %d", IVSize, len(iv))
+	}
+
+	ctx := C.X_EIA3_CTX_new()
+	if ctx == nil {
+		return nil, fmt.Errorf("failed to allocate EIA3 context: %w", crypto.ErrMallocFailure)
+	}
+
+	a := &EIA3Authenticator{ctx: ctx}
+	runtime.SetFinalizer(a, func(a *EIA3Authenticator) {
+		if a.ctx != nil {
+			C.X_EIA3_CTX_free(a.ctx)
+		}
+	})
+
+	kptr := (*C.uchar)(&key[0])
+	iptr := (*C.uchar)(&iv[0])
+
+	if C.X_EIA3_Init(ctx, kptr, iptr) != 1 {
+		runtime.SetFinalizer(a, nil)
+		C.X_EIA3_CTX_free(ctx)
+		return nil, fmt.Errorf("EIA3_Init failed: %w", crypto.PopError())
+	}
+
+	return a, nil
+}
+
+// Update 输入待认证数据（可多次调用，内部缓冲）
+func (a *EIA3Authenticator) Update(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	a.data = append(a.data, data...)
+	return nil
+}
+
+// Final 完成认证计算，返回 4 字节 MAC。
+// 调用后认证器不可复用。
+func (a *EIA3Authenticator) Final() ([]byte, error) {
+	if a.ctx == nil {
+		return nil, fmt.Errorf("EIA3 context already finalized")
+	}
+
+	// 一次性调用 EIA3_Update（绕过 Tongsuo 流式 bug）
+	if len(a.data) > 0 {
+		if C.X_EIA3_Update(a.ctx, (*C.uchar)(&a.data[0]), C.size_t(len(a.data))) != 1 {
+			return nil, fmt.Errorf("EIA3_Update failed: %w", crypto.PopError())
+		}
+	}
+
+	out := make([]byte, MACSize)
+	C.X_EIA3_Final(a.ctx, (*C.uchar)(&out[0]))
+	C.X_EIA3_CTX_free(a.ctx)
+	a.ctx = nil
+	a.data = nil
+	runtime.SetFinalizer(a, nil)
+	return out, nil
+}
+
+// EIA3MAC 便捷函数，计算数据的 EIA3 MAC (4 字节)
+func EIA3MAC(key, iv, data []byte) ([]byte, error) {
+	a, err := NewEIA3Authenticator(key, iv)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Update(data); err != nil {
+		return nil, err
+	}
+	return a.Final()
+}

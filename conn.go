@@ -33,19 +33,19 @@ import (
 )
 
 var (
-	errTryAgain   = errors.New("try again")
+	errTryAgain = errors.New("try again")
 )
 
 type Conn struct {
 	*SSL
 
 	conn              net.Conn
-	ctx              *Ctx // for gc
+	ctx               *Ctx // for gc
 	intoSSL           *crypto.ReadBio
-	fromSSL         *crypto.WriteBio
-	isShutdown       bool
-	mtx              sync.Mutex
-	wantReadFuture  *utils.Future
+	fromSSL           *crypto.WriteBio
+	isShutdown        bool
+	mtx               sync.Mutex
+	wantReadFuture    *utils.Future
 	truncatedShutdown bool
 }
 

@@ -36,16 +36,16 @@ func benchSM3(b *testing.B, size int64) {
 }
 
 // 小块: 测量 CGo 固定开销 (~50-200ns)
-func BenchmarkSM3_16B(b *testing.B)    { benchSM3(b, 16) }
-func BenchmarkSM3_64B(b *testing.B)    { benchSM3(b, 64) }
+func BenchmarkSM3_16B(b *testing.B) { benchSM3(b, 16) }
+func BenchmarkSM3_64B(b *testing.B) { benchSM3(b, 64) }
 
 // 中块: 测量有效吞吐量
-func BenchmarkSM3_1KB(b *testing.B)    { benchSM3(b, 1024) }
-func BenchmarkSM3_8KB(b *testing.B)    { benchSM3(b, 8*1024) }
+func BenchmarkSM3_1KB(b *testing.B) { benchSM3(b, 1024) }
+func BenchmarkSM3_8KB(b *testing.B) { benchSM3(b, 8*1024) }
 
 // 大块: 测量极限吞吐量
-func BenchmarkSM3_1MB(b *testing.B)    { benchSM3(b, 1024*1024) }
-func BenchmarkSM3_8MB(b *testing.B)    { benchSM3(b, 8*1024*1024) }
+func BenchmarkSM3_1MB(b *testing.B) { benchSM3(b, 1024*1024) }
+func BenchmarkSM3_8MB(b *testing.B) { benchSM3(b, 8*1024*1024) }
 
 // 增量哈希基准
 func benchmarkSM3Incremental(b *testing.B, chunkSize, totalSize int) {

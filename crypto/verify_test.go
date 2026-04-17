@@ -114,75 +114,75 @@ func createTestCAChainSM2(t *testing.T) (root *crypto.Certificate, rootKey crypt
 		Organization: "SM2 Root CA",
 		CommonName:   "SM2 Root CA",
 	}
-		root, err = crypto.NewCertificate(rootInfo, rootKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := root.AddExtension(crypto.NidBasicConstraints, "critical,CA:TRUE"); err != nil {
-			t.Fatal(err)
-		}
-		if err := root.AddExtension(crypto.NidKeyUsage, "critical,keyCertSign,cRLSign"); err != nil {
-			t.Fatal(err)
-		}
-		if err := root.Sign(rootKey, crypto.DigestSM3); err != nil {
-			t.Fatal(err)
-		}
+	root, err = crypto.NewCertificate(rootInfo, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.AddExtension(crypto.NidBasicConstraints, "critical,CA:TRUE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.AddExtension(crypto.NidKeyUsage, "critical,keyCertSign,cRLSign"); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Sign(rootKey, crypto.DigestSM3); err != nil {
+		t.Fatal(err)
+	}
 
-		// Intermediate CA (SM2)
-		intermediateKey, err = sm2.GenerateKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		interInfo := &crypto.CertificateInfo{
-			Serial:       big.NewInt(2),
-			Issued:       0,
-			Expires:      365 * 24 * time.Hour,
-			Country:      "CN",
-			Organization: "SM2 Intermediate CA",
-			CommonName:   "SM2 Intermediate CA",
-		}
-		intermediate, err = crypto.NewCertificate(interInfo, intermediateKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := intermediate.SetIssuer(root); err != nil {
-			t.Fatal(err)
-		}
-		if err := intermediate.AddExtension(crypto.NidBasicConstraints, "critical,CA:TRUE"); err != nil {
-			t.Fatal(err)
-		}
-		if err := intermediate.Sign(rootKey, crypto.DigestSM3); err != nil {
-			t.Fatal(err)
-		}
+	// Intermediate CA (SM2)
+	intermediateKey, err = sm2.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	interInfo := &crypto.CertificateInfo{
+		Serial:       big.NewInt(2),
+		Issued:       0,
+		Expires:      365 * 24 * time.Hour,
+		Country:      "CN",
+		Organization: "SM2 Intermediate CA",
+		CommonName:   "SM2 Intermediate CA",
+	}
+	intermediate, err = crypto.NewCertificate(interInfo, intermediateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := intermediate.SetIssuer(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := intermediate.AddExtension(crypto.NidBasicConstraints, "critical,CA:TRUE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := intermediate.Sign(rootKey, crypto.DigestSM3); err != nil {
+		t.Fatal(err)
+	}
 
-		// Leaf (SM2)
-		leafKey, err = sm2.GenerateKey()
-		if err != nil {
-			t.Fatal(err)
-		}
-		leafInfo := &crypto.CertificateInfo{
-			Serial:       big.NewInt(3),
-			Issued:       0,
-			Expires:      365 * 24 * time.Hour,
-			Country:      "CN",
-			Organization: "SM2 Leaf",
-			CommonName:   "sm2.example.com",
-		}
-		leaf, err = crypto.NewCertificate(leafInfo, leafKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := leaf.SetIssuer(intermediate); err != nil {
-			t.Fatal(err)
-		}
-		if err := leaf.AddExtension(crypto.NidBasicConstraints, "critical,CA:FALSE"); err != nil {
-			t.Fatal(err)
-		}
-		if err := leaf.Sign(intermediateKey, crypto.DigestSM3); err != nil {
-			t.Fatal(err)
-		}
+	// Leaf (SM2)
+	leafKey, err = sm2.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafInfo := &crypto.CertificateInfo{
+		Serial:       big.NewInt(3),
+		Issued:       0,
+		Expires:      365 * 24 * time.Hour,
+		Country:      "CN",
+		Organization: "SM2 Leaf",
+		CommonName:   "sm2.example.com",
+	}
+	leaf, err = crypto.NewCertificate(leafInfo, leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.SetIssuer(intermediate); err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.AddExtension(crypto.NidBasicConstraints, "critical,CA:FALSE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.Sign(intermediateKey, crypto.DigestSM3); err != nil {
+		t.Fatal(err)
+	}
 
-		return
+	return
 }
 
 func TestVerify_ValidChain(t *testing.T) {

@@ -103,3 +103,13 @@ int X_SSL_CTX_set1_curves(SSL_CTX *ctx, const int *curves, size_t len)
 {
 	return SSL_CTX_set1_curves(ctx, (int *)curves, (size_t)len);
 }
+
+// cgo.Handle 辅助：将整数 handle 值转为 void* 存入 OpenSSL ex_data。
+// 在 C 层完成 uintptr→void* 转换，避免 Go vet 的 unsafe.Pointer 误报。
+void* X_cgo_handle_to_ptr(intptr_t h) {
+	return (void*)h;
+}
+
+intptr_t X_cgo_ptr_to_handle(void* p) {
+	return (intptr_t)p;
+}

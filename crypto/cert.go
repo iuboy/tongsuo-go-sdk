@@ -253,9 +253,9 @@ func (c *Certificate) SetIssuerName(name *Name) error {
 // - 序列号编码不超过 20 字节（160 位）
 //
 // 安全特性：
-// - 使用固定 20 字节编码，防止通过 DER 编码长度泄露序列号量级信息
-// - 符合 CA/Browser Forum Baseline Requirements Section 7.1：
-//   至少 64 位熵，不超过 159 位
+//   - 使用固定 20 字节编码，防止通过 DER 编码长度泄露序列号量级信息
+//   - 符合 CA/Browser Forum Baseline Requirements Section 7.1：
+//     至少 64 位熵，不超过 159 位
 func (c *Certificate) SetSerial(serial *big.Int) error {
 	if serial == nil {
 		return fmt.Errorf("serial number cannot be nil")
@@ -355,14 +355,14 @@ func (c *Certificate) insecureSign(privKey PrivateKey, digest DigestAlgo) error 
 	// Tongsuo 8.5: SM2 证书签名需要符合 GM/T 0009-2012 标准
 	// SM2 签名必须使用 SM3 摘要对用户 ID 和消息进行预处理
 	if privKey.KeyType() == KeyTypeSM2 {
-			return signWithSM2MD(privKey, md, func(ctx *C.EVP_MD_CTX) C.int {
-				return C.X509_sign_ctx(c.x, ctx)
-			})
+		return signWithSM2MD(privKey, md, func(ctx *C.EVP_MD_CTX) C.int {
+			return C.X509_sign_ctx(c.x, ctx)
+		})
 	}
 
 	// 非 SM2 证书使用原来的方法
 	if C.X509_sign(c.x, privKey.EvpPKey(), md) <= 0 {
-	return fmt.Errorf("failed to sign certificate: %w", PopError())
+		return fmt.Errorf("failed to sign certificate: %w", PopError())
 	}
 	return nil
 }

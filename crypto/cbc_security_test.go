@@ -659,7 +659,7 @@ func TestCBCSafeWrapper_MultipleRoundTrips(t *testing.T) {
 
 	messages := [][]byte{
 		[]byte("short"),
-		[]byte("exactly sixteen"),                  // 16 bytes = 1 AES block
+		[]byte("exactly sixteen"), // 16 bytes = 1 AES block
 		[]byte("this is a longer message that spans multiple AES blocks for testing"),
 		bytes.Repeat([]byte{0x42}, 1),
 		bytes.Repeat([]byte{0x42}, 15),

@@ -26,6 +26,10 @@ import (
 const (
 	BlockSize = 16
 	KeySize   = 16
+
+	sm4GCMTagLen   = 16
+	sm4CCMTagLen   = 12
+	sm4GCMMinIVLen = 12
 )
 
 // 安全模式配置
@@ -356,7 +360,7 @@ func NewEncrypter(mode int, key []byte, iv []byte) (Encrypter, error) {
 	}
 
 	// NIST SP 800-38D Section 8: GCM IV 推荐长度 12 字节
-	if mode == crypto.CipherModeGCM && len(iv) > 0 && len(iv) < 12 {
+	if mode == crypto.CipherModeGCM && len(iv) > 0 && len(iv) < sm4GCMMinIVLen {
 		return nil, fmt.Errorf("SM4-GCM IV too short: %w", crypto.ErrBadIvSize)
 	}
 
@@ -368,10 +372,10 @@ func NewEncrypter(mode int, key []byte, iv []byte) (Encrypter, error) {
 	}
 
 	if mode == crypto.CipherModeGCM {
-		tagLen = 16
+		tagLen = sm4GCMTagLen
 	}
 	if mode == crypto.CipherModeCCM {
-		tagLen = 12
+		tagLen = sm4CCMTagLen
 	}
 
 	// CCM/GCM 需要先设置 IV 长度再设置 IV

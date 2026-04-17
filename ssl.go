@@ -18,9 +18,12 @@ package tongsuogo
 import "C"
 
 import (
+	"fmt"
 	"log"
 	"runtime/cgo"
 	"unsafe"
+
+	"github.com/tongsuo-project/tongsuo-go-sdk/crypto"
 )
 
 type SSLTLSExtErr int
@@ -220,4 +223,59 @@ func init() {
 	// 初始化 crypto 包中的回调 thunk 指针
 	// sni.c 中的 thunk 函数在 crypto/shim.c 的 static 变量中设置
 	C.X_init_crypto_thunks()
+}
+
+// ---------------------------------------------------------------------------
+// OCSP Stapling (RFC 6066 / RFC 6961)
+// ---------------------------------------------------------------------------
+
+const (
+	// TLSEXTStatustypeOCSP OCSP 状态类型 (RFC 6066)
+	TLSEXTStatustypeOCSP = C.TLSEXT_STATUSTYPE_ocsp
+)
+
+// EnableOCSPStapling 在客户端 SSL 连接上启用 OCSP stapling 请求。
+//
+// 调用后，TLS 握手时会向服务器请求 OCSP 响应。
+// 握手完成后可通过 GetOCSPResponse() 获取服务器返回的 OCSP 响应。
+//
+// 符合 RFC 6066 Section 8: Certificate Status Request
+func (s *SSL) EnableOCSPStapling() error {
+	if C.X_SSL_set_tlsext_status_type(s.ssl, C.TLSEXT_STATUSTYPE_ocsp) != 1 {
+		return fmt.Errorf("failed to enable OCSP stapling: %w", crypto.PopError())
+	}
+	return nil
+}
+
+// GetOCSPResponse 获取服务器返回的 OCSP 响应。
+//
+// 必须在握手完成后调用，且之前已调用 EnableOCSPStapling()。
+// 如果服务器未返回 OCSP 响应，返回 nil, nil。
+func (s *SSL) GetOCSPResponse() ([]byte, error) {
+	var resp *C.uchar
+	length := C.X_SSL_get_tlsext_status_ocsp_resp(s.ssl, &resp)
+	if length < 0 {
+		return nil, fmt.Errorf("failed to get OCSP response: %w", crypto.PopError())
+	}
+	if length == 0 || resp == nil {
+		return nil, nil
+	}
+	return C.GoBytes(unsafe.Pointer(resp), length), nil
+}
+
+// SetOCSPResponse 在服务端 SSL 连接上设置 OCSP 响应数据。
+//
+// 当客户端请求 OCSP stapling 时，服务器会通过 TLS 扩展
+// 将此 OCSP 响应发送给客户端。
+//
+// 注意: resp 的内存在握手期间必须保持有效。
+func (s *SSL) SetOCSPResponse(resp []byte) error {
+	if len(resp) == 0 {
+		return fmt.Errorf("OCSP response cannot be empty: %w", crypto.ErrNilParameter)
+	}
+	if C.X_SSL_set_tlsext_status_ocsp_resp(s.ssl,
+		(*C.uchar)(&resp[0]), C.size_t(len(resp))) != 1 {
+		return fmt.Errorf("failed to set OCSP response: %w", crypto.PopError())
+	}
+	return nil
 }

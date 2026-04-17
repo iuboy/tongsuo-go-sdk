@@ -28,6 +28,12 @@ import (
 	"unsafe"
 )
 
+// 安全参数常量
+const (
+	maxRandomBytesLen = 1 << 20 // 1MB，防止 DoS
+	minPrimeBits      = 512     // 最小素数位数，符合 NIST 标准
+)
+
 // ConstantTimeCompare 比较两个字节切片，使用常量时间算法
 //
 // 安全特性：
@@ -166,7 +172,7 @@ func ZeroBytesOnce(b []byte) {
 
 // ZeroString 安全地清空字符串内容
 //
-// ZeroString 安全清零字符串内容
+// # ZeroString 安全清零字符串内容
 //
 // Deprecated: Go 字符串是不可变的。此函数只能清零 []byte(*s) 产生的堆上副本，
 // 原始字符串数据（可能在只读数据段或字符串缓存中）不会被清零。
@@ -264,8 +270,8 @@ func SecureRandomBytes(length int) ([]byte, error) {
 		return nil, fmt.Errorf("invalid random bytes length: %d", length)
 	}
 
-	if length > 1048576 { // 限制最大1MB，防止DoS
-		return nil, fmt.Errorf("random bytes length too large: %d (maximum 1048576)", length)
+	if length > maxRandomBytesLen {
+		return nil, fmt.Errorf("random bytes length too large: %d (maximum %d)", length, maxRandomBytesLen)
 	}
 
 	buf := make([]byte, length)
@@ -339,9 +345,9 @@ func SecureRandomPrime(bits int, rounds ...int) (*big.Int, error) {
 		return nil, fmt.Errorf("invalid prime bits: %d", bits)
 	}
 
-	// 强制最小素数位数为 512
-	if bits < 512 {
-		return nil, fmt.Errorf("prime bits too small for cryptographic use: %d (minimum 512)", bits)
+	// 强制最小素数位数
+	if bits < minPrimeBits {
+		return nil, fmt.Errorf("prime bits too small for cryptographic use: %d (minimum %d)", bits, minPrimeBits)
 	}
 
 	// 根据位数确定默认测试轮数
@@ -416,8 +422,8 @@ func SecureRandomPrime(bits int, rounds ...int) (*big.Int, error) {
 //	安全素数 q，其中 2q+1 也是素数
 //	error - 错误
 func GenerateSafePrime(bits int) (*big.Int, error) {
-	if bits < 512 {
-		return nil, fmt.Errorf("safe prime bits too small: %d (minimum 512)", bits)
+	if bits < minPrimeBits {
+		return nil, fmt.Errorf("safe prime bits too small: %d (minimum %d)", bits, minPrimeBits)
 	}
 
 	const maxAttempts = 1000

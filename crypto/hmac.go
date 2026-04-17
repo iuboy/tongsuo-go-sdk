@@ -24,6 +24,9 @@ import (
 	"unsafe"
 )
 
+// maxHMACKeyLen HMAC 密钥最大长度（RFC 2104 无硬性限制，此处防止 DoS）
+const maxHMACKeyLen = 4096
+
 type HMAC struct {
 	ctx *C.HMAC_CTX
 	md  *C.EVP_MD
@@ -36,8 +39,8 @@ func NewHMAC(key []byte, digest DigestAlgo) (*HMAC, error) {
 	}
 
 	// 安全验证：密钥长度上限（防止DoS攻击）
-	if len(key) > 4096 {
-		return nil, fmt.Errorf("HMAC key too long (max 4096 bytes, got %d)", len(key))
+	if len(key) > maxHMACKeyLen {
+		return nil, fmt.Errorf("HMAC key too long (max %d bytes, got %d)", maxHMACKeyLen, len(key))
 	}
 
 	var md *C.EVP_MD = getDigestFunction(digest)

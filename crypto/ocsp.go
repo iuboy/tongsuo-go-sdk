@@ -35,12 +35,12 @@ const (
 
 // OCSP 响应状态码，与 RFC 6960 Section 2.3 一致
 const (
-	OCSPResponseStatusSuccessful          = 0
-	OCSPResponseStatusMalformedRequest    = 1
-	OCSPResponseStatusInternalError       = 2
-	OCSPResponseStatusTryLater            = 3
-	OCSPResponseStatusSignatureRequired   = 5
-	OCSPResponseStatusUnauthorized        = 6
+	OCSPResponseStatusSuccessful        = 0
+	OCSPResponseStatusMalformedRequest  = 1
+	OCSPResponseStatusInternalError     = 2
+	OCSPResponseStatusTryLater          = 3
+	OCSPResponseStatusSignatureRequired = 5
+	OCSPResponseStatusUnauthorized      = 6
 )
 
 // 撤销原因常量，与 RFC 5280 Section 5.3.1 一致
@@ -59,9 +59,9 @@ const (
 
 // OCSPResponse 表示已解析的 OCSP 响应
 type OCSPResponse struct {
-	resp      *C.OCSP_RESPONSE
-	Raw       []byte
-	freeOnce  sync.Once
+	resp     *C.OCSP_RESPONSE
+	Raw      []byte
+	freeOnce sync.Once
 }
 
 // buildCertID 构建 OCSP 证书 ID（内部辅助函数）
@@ -116,13 +116,14 @@ func buildCertID(issuer *C.X509, serial *big.Int) (*C.OCSP_CERTID, error) {
 // 其他密钥类型使用对应的标准摘要算法。
 //
 // 参数：
-//   issuer:    颁发者 CA 证书（用于构建 CertID 和签名）
-//   privKey:   签名私钥（SM2/RSA/ECDSA）
-//   serial:    目标证书序列号
-//   status:    证书状态（OCSPStatusGood/OCSPStatusRevoked/OCSPStatusUnknown）
-//   thisUpdate: 此更新时间
-//   nextUpdate: 下次更新时间（零值表示不设置）
-//   revokedAt: 撤销时间（仅 status=OCSPStatusRevoked 时有效）
+//
+//	issuer:    颁发者 CA 证书（用于构建 CertID 和签名）
+//	privKey:   签名私钥（SM2/RSA/ECDSA）
+//	serial:    目标证书序列号
+//	status:    证书状态（OCSPStatusGood/OCSPStatusRevoked/OCSPStatusUnknown）
+//	thisUpdate: 此更新时间
+//	nextUpdate: 下次更新时间（零值表示不设置）
+//	revokedAt: 撤销时间（仅 status=OCSPStatusRevoked 时有效）
 func CreateOCSPResponse(issuer *Certificate, privKey PrivateKey,
 	serial *big.Int, status int, thisUpdate, nextUpdate time.Time,
 	revokedAt time.Time) ([]byte, error) {
@@ -159,26 +160,26 @@ func CreateOCSPResponse(issuer *Certificate, privKey PrivateKey,
 
 	// 转换时间
 	thisASN1, err := timeToASN1(thisUpdate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert thisUpdate: %w", err)
-		}
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert thisUpdate: %w", err)
+	}
 	defer C.ASN1_TIME_free(thisASN1)
 
 	var nextASN1 *C.ASN1_TIME
 	if !nextUpdate.IsZero() {
 		nextASN1, err = timeToASN1(nextUpdate)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert nextUpdate: %w", err)
-			}
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert nextUpdate: %w", err)
+		}
 		defer C.ASN1_TIME_free(nextASN1)
 	}
 
 	var revASN1 *C.ASN1_TIME
 	if status == OCSPStatusRevoked && !revokedAt.IsZero() {
 		revASN1, err = timeToASN1(revokedAt)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert revokedAt: %w", err)
-			}
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert revokedAt: %w", err)
+		}
 		defer C.ASN1_TIME_free(revASN1)
 	}
 
@@ -203,28 +204,7 @@ func CreateOCSPResponse(issuer *Certificate, privKey PrivateKey,
 	}
 	defer C.X_OCSP_response_free(resp)
 
-	// 序列化为 DER
-	// 先获取长度
-	derLen := C.X_i2d_OCSP_RESPONSE(resp, nil)
-	if derLen <= 0 {
-		return nil, fmt.Errorf("failed to get OCSP response DER length: %w", PopError())
-	}
-
-	// 分配 C 缓冲区并序列化（避免 CGo 指针规则问题）
-	derBuf := (*C.uchar)(C.malloc(C.size_t(derLen)))
-	if derBuf == nil {
-		return nil, ErrMallocFailure
-	}
-	defer C.free(unsafe.Pointer(derBuf))
-
-	derPtr := derBuf
-	if C.X_i2d_OCSP_RESPONSE(resp, &derPtr) != derLen {
-		return nil, fmt.Errorf("failed to serialize OCSP response: %w", PopError())
-	}
-
-	// 复制到 Go 字节切片
-	der := C.GoBytes(unsafe.Pointer(derBuf), C.int(derLen))
-	return der, nil
+	return serializeOCSPResponseToDER(resp)
 }
 
 // ParseOCSPResponse 解析 DER 编码的 OCSP 响应
@@ -292,16 +272,18 @@ func (r *OCSPResponse) GetStatus() int {
 // FindStatus 在 OCSP 响应中查找指定证书的状态
 //
 // 参数：
-//   issuer: 颁发者证书（用于构建 CertID）
-//   serial: 目标证书序列号
+//
+//	issuer: 颁发者证书（用于构建 CertID）
+//	serial: 目标证书序列号
 //
 // 返回：
-//   certStatus:      证书状态（OCSPStatusGood/OCSPStatusRevoked/OCSPStatusUnknown）
-//   revocationReason: 撤销原因（仅 OCSPStatusRevoked 时有效）
-//   thisUpdate:      此更新时间
-//   nextUpdate:      下次更新时间
-//   revokedAt:       撤销时间（仅 OCSPStatusRevoked 时有效）
-//   err:             错误
+//
+//	certStatus:      证书状态（OCSPStatusGood/OCSPStatusRevoked/OCSPStatusUnknown）
+//	revocationReason: 撤销原因（仅 OCSPStatusRevoked 时有效）
+//	thisUpdate:      此更新时间
+//	nextUpdate:      下次更新时间
+//	revokedAt:       撤销时间（仅 OCSPStatusRevoked 时有效）
+//	err:             错误
 func (r *OCSPResponse) FindStatus(issuer *Certificate, serial *big.Int) (
 	certStatus int, revocationReason int,
 	thisUpdate, nextUpdate, revokedAt time.Time, err error) {
@@ -322,7 +304,6 @@ func (r *OCSPResponse) FindStatus(issuer *Certificate, serial *big.Int) (
 		return 0, 0, time.Time{}, time.Time{}, time.Time{},
 			fmt.Errorf("serial number must be positive: %w", ErrNilParameter)
 	}
-
 
 	// 获取 BasicOCSPResponse
 	bs := C.X_OCSP_response_get1_basic(r.resp)
@@ -368,6 +349,27 @@ func (r *OCSPResponse) FindStatus(issuer *Certificate, serial *big.Int) (
 	}
 
 	return certStatus, revocationReason, thisUpdate, nextUpdate, revokedAt, nil
+}
+
+// serializeOCSPResponseToDER 将 OCSP_RESPONSE 序列化为 DER 编码的字节切片
+func serializeOCSPResponseToDER(resp *C.OCSP_RESPONSE) ([]byte, error) {
+	derLen := C.X_i2d_OCSP_RESPONSE(resp, nil)
+	if derLen <= 0 {
+		return nil, fmt.Errorf("failed to get OCSP response DER length: %w", PopError())
+	}
+
+	derBuf := (*C.uchar)(C.malloc(C.size_t(derLen)))
+	if derBuf == nil {
+		return nil, ErrMallocFailure
+	}
+	defer C.free(unsafe.Pointer(derBuf))
+
+	derPtr := derBuf
+	if C.X_i2d_OCSP_RESPONSE(resp, &derPtr) != derLen {
+		return nil, fmt.Errorf("failed to serialize OCSP response: %w", PopError())
+	}
+
+	return C.GoBytes(unsafe.Pointer(derBuf), C.int(derLen)), nil
 }
 
 // timeToASN1 将 time.Time 转换为 ASN1_TIME

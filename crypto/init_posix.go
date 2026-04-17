@@ -55,6 +55,8 @@ int go_init_locks() {
 
 void go_thread_locking_callback(int mode, int n, const char *file,
 	int line) {
+	(void)file;
+	(void)line;
 	if (mode & CRYPTO_LOCK) {
 		pthread_mutex_lock(&goopenssl_locks[n]);
 	} else {

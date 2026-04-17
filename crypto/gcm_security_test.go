@@ -535,7 +535,7 @@ func TestDecryptWithAutoGCMIVDataTooShort(t *testing.T) {
 	}{
 		{"empty", []byte{}},
 		{"16_bytes", make([]byte, 16)},
-		{"28_bytes", make([]byte, 28)}, // 最小 29
+		{"27_bytes", make([]byte, 27)}, // 最小 28 (IV 12 + Tag 16)
 	}
 
 	for _, tc := range shortData {

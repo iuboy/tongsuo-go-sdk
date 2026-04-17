@@ -32,7 +32,7 @@ func createTestCertificate(t *testing.T, key PrivateKey) *Certificate {
 
 	info := &CertificateInfo{
 		Serial:       serial,
-		Issued:       -1 * time.Hour,     // 1小时前签发
+		Issued:       -1 * time.Hour,       // 1小时前签发
 		Expires:      24 * 365 * time.Hour, // 1年后过期
 		Country:      "CN",
 		Organization: "Test Org",

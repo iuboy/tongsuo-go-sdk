@@ -42,9 +42,9 @@ func benchmarkSM4ECB(b *testing.B, size int) {
 	}
 }
 
-func BenchmarkSM4_ECB_16B(b *testing.B)   { benchmarkSM4ECB(b, 16) }
-func BenchmarkSM4_ECB_1KB(b *testing.B)   { benchmarkSM4ECB(b, 1024) }
-func BenchmarkSM4_ECB_64KB(b *testing.B)  { benchmarkSM4ECB(b, 64*1024) }
+func BenchmarkSM4_ECB_16B(b *testing.B)  { benchmarkSM4ECB(b, 16) }
+func BenchmarkSM4_ECB_1KB(b *testing.B)  { benchmarkSM4ECB(b, 1024) }
+func BenchmarkSM4_ECB_64KB(b *testing.B) { benchmarkSM4ECB(b, 64*1024) }
 
 // --- CBC 模式 (Go stdlib CBC + SM4 block) ---
 
@@ -73,9 +73,9 @@ func benchmarkSM4CBCEncrypt(b *testing.B, size int) {
 	}
 }
 
-func BenchmarkSM4_CBC_Encrypt_16B(b *testing.B)   { benchmarkSM4CBCEncrypt(b, 16) }
-func BenchmarkSM4_CBC_Encrypt_1KB(b *testing.B)   { benchmarkSM4CBCEncrypt(b, 1024) }
-func BenchmarkSM4_CBC_Encrypt_64KB(b *testing.B)  { benchmarkSM4CBCEncrypt(b, 64*1024) }
+func BenchmarkSM4_CBC_Encrypt_16B(b *testing.B)  { benchmarkSM4CBCEncrypt(b, 16) }
+func BenchmarkSM4_CBC_Encrypt_1KB(b *testing.B)  { benchmarkSM4CBCEncrypt(b, 1024) }
+func BenchmarkSM4_CBC_Encrypt_64KB(b *testing.B) { benchmarkSM4CBCEncrypt(b, 64*1024) }
 
 // --- GCM 模式 ---
 
@@ -106,9 +106,9 @@ func benchmarkSM4GCMSeal(b *testing.B, size int) {
 	}
 }
 
-func BenchmarkSM4_GCM_Seal_16B(b *testing.B)   { benchmarkSM4GCMSeal(b, 16) }
-func BenchmarkSM4_GCM_Seal_1KB(b *testing.B)   { benchmarkSM4GCMSeal(b, 1024) }
-func BenchmarkSM4_GCM_Seal_64KB(b *testing.B)  { benchmarkSM4GCMSeal(b, 64*1024) }
+func BenchmarkSM4_GCM_Seal_16B(b *testing.B)  { benchmarkSM4GCMSeal(b, 16) }
+func BenchmarkSM4_GCM_Seal_1KB(b *testing.B)  { benchmarkSM4GCMSeal(b, 1024) }
+func BenchmarkSM4_GCM_Seal_64KB(b *testing.B) { benchmarkSM4GCMSeal(b, 64*1024) }
 
 // --- EVP API 加密 ---
 

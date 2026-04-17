@@ -73,6 +73,15 @@ const (
 	KeyTypeSM2     = NidSM2
 )
 
+const (
+	rsaMinKeyBits     = 2048
+	rsaMaxKeyBits     = 40960
+	rsaStandardPubExp = 65537
+	rsaMinPubExp      = 3
+	rsaMaxPubExp      = 1<<31 - 1
+	sm2IDMaxLength    = 255
+)
+
 type PublicKey interface {
 	// VerifyPKCS1v15 verifies the data signature using PKCS1.15
 	VerifyPKCS1v15(method Method, data, sig []byte) error
@@ -127,13 +136,13 @@ type PublicKey interface {
 // SignOptions 签名选项，用于配置签名行为
 //
 // 安全特性：
-	// - 允许自定义SM2用户ID，防止固定ID泄露风险
+// - 允许自定义SM2用户ID，防止固定ID泄露风险
 // // - 符合 GM/T 0009-2012 标准
-	//
-	// 使用场景：
-	// - SM2签名时需要自定义用户ID
-	// - 多租户环境中的密钥隔离
-	// - 符合特定应用场景的ID要求
+//
+// 使用场景：
+// - SM2签名时需要自定义用户ID
+// - 多租户环境中的密钥隔离
+// - 符合特定应用场景的ID要求
 type SignOptions struct {
 	// SM2ID SM2用户标识符
 	// 根据 GM/T 0009-2012，SM2签名需要用户ID
@@ -160,18 +169,20 @@ type SignOptions struct {
 // 当 isHex=false 时，ID 字符串直接作为原始字节使用。
 //
 // 参数：
-//   id     - SM2 用户 ID 字符串
-//   isHex  - 是否为十六进制编码
+//
+//	id     - SM2 用户 ID 字符串
+//	isHex  - 是否为十六进制编码
 //
 // 返回值：
-//   解码后的 ID 字节
-//   error  - 解码失败或 ID 为空时返回错误
+//
+//	解码后的 ID 字节
+//	error  - 解码失败或 ID 为空时返回错误
 func ParseSM2ID(id string, isHex bool) ([]byte, error) {
 	if len(id) == 0 {
 		return nil, fmt.Errorf("SM2 ID cannot be empty")
 	}
-	if len(id) > 255 {
-		return nil, fmt.Errorf("SM2 ID too long (max 255 bytes, got %d)", len(id))
+	if len(id) > sm2IDMaxLength {
+		return nil, fmt.Errorf("SM2 ID too long (max %d bytes, got %d)", sm2IDMaxLength, len(id))
 	}
 	if isHex {
 		decoded, err := hex.DecodeString(id)
@@ -198,10 +209,11 @@ func ParseSM2ID(id string, isHex bool) ([]byte, error) {
 // 符合 GM/T 0009-2012 标准中规定的默认值语义。
 //
 // 返回值：
-//   默认签名选项（仅用于测试/兼容性）
+//
+//	默认签名选项（仅用于测试/兼容性）
 func DefaultSM2SignOptions() *SignOptions {
 	return &SignOptions{
-		SM2ID:     "1234567812345678",
+		SM2ID:      "1234567812345678",
 		SM2IDIsHex: false,
 	}
 }
@@ -335,102 +347,92 @@ func (key *pKey) SignWithOptions(method Method, data []byte, options *SignOption
 	ctx := C.X_EVP_MD_CTX_new()
 	defer C.X_EVP_MD_CTX_free(ctx)
 
-	// 防止数据在签名过程中被GC移动（必须在函数返回时执行）
 	defer runtime.KeepAlive(data)
 	defer runtime.KeepAlive(key)
 
-	// Tongsuo 8.5: SM2 签名必须符合 GM/T 0009-2012 标准
-	// SM2 签名必须使用 SM3 摘要并对用户 ID 进行预处理
-	if key.KeyType() == KeyTypeSM2 {
-		// 验证摘要算法：SM2 必须使用 SM3
-		sm3Method := C.X_EVP_sm3()
-		if method != nil && method != sm3Method {
-		if len(data) == 0 {
-			return nil, ErrNilParameter
-		}
-			return nil, fmt.Errorf("SM2 signature must use SM3 digest (GM/T 0009-2012)")
-		}
+	switch key.KeyType() {
+	case KeyTypeSM2:
+		return key.signSM2(ctx, method, data, options)
+	case KeyTypeED25519:
+		return key.signEd25519(ctx, data)
+	default:
+		return key.signStandard(ctx, method, data)
+	}
+}
 
-		// 使用提供的选项或默认选项
-		if options == nil {
-			sm2DefaultIDWarnOnce.Do(func() {
-				log.Println("WARNING: SM2 signing with default user ID. " +
-					"The default ID is a well-known test value per GM/T 0009-2012. " +
-					"Production applications MUST use a custom, unique SM2 ID. " +
-					"Pass SignOptions with a custom SM2ID to suppress this warning.")
-			})
-			options = DefaultSM2SignOptions()
-		}
-
-		// 解析 SM2 用户 ID 字节（统一使用 ParseSM2ID）
-		sm2IDBytes, err := ParseSM2ID(options.SM2ID, options.SM2IDIsHex)
-		if err != nil {
-			return nil, err
-		}
-
-		var pctx *C.EVP_PKEY_CTX
-
-		// 初始化签名上下文
-		if C.X_EVP_DigestSignInit(ctx, &pctx, sm3Method, nil, key.key) != 1 {
-			return nil, PopError()
-		}
-
-		// 根据 GM/T 0009-2012，SM2 签名需要设置用户 ID
-		// 用户ID用于签名过程中的预处理，确保签名的唯一性
-		//
-		// 安全注意事项：
-		// - 不同应用应使用不同的ID
-		// - ID应该保密或至少难以猜测
-		// - 固定ID可能导致签名密钥信息泄露
-		//
-		// 将解码后的 ID 字节传递给 C（而非原始 hex 字符串）
-		// A-01 修复：使用 CBytes 代替 CString，避免 null 字节截断
-		// C.CString 在遇到 \x00 时会截断，而 SM2 ID 可能包含 null 字节
-		sm2IDPtr := C.CBytes(sm2IDBytes)
-		defer C.X_free(sm2IDPtr)
-		defer runtime.KeepAlive(sm2IDBytes)
-
-		if C.X_EVP_PKEY_CTX_set1_id(pctx, sm2IDPtr, C.int(len(sm2IDBytes))) <= 0 {
-			return nil, fmt.Errorf("failed to set SM2 ID: %w", PopError())
-		}
-
-		// 执行签名
-		var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
-		sig := make([]byte, sigblen)
-
-		if C.X_EVP_DigestSign(ctx, (*C.uchar)(unsafe.Pointer(&sig[0])), &sigblen,
-			(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
-			return nil, PopError()
-		}
-
-		runtime.KeepAlive(sig)
-
-		return sig[:sigblen], nil
+func (key *pKey) signSM2(ctx *C.EVP_MD_CTX, method Method, data []byte, options *SignOptions) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, ErrNilParameter
 	}
 
-	// Ed25519 签名（不需要摘要）
-	if key.KeyType() == KeyTypeED25519 {
-		// do ED specific one-shot sign
-		if method != nil || len(data) == 0 {
-			return nil, ErrNilParameter
-		}
-
-		var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
-		sig := make([]byte, sigblen)
-
-		if C.X_EVP_DigestSignInit(ctx, nil, nil, nil, key.key) != 1 {
-			return nil, PopError()
-		}
-
-		if C.X_EVP_DigestSign(ctx, (*C.uchar)(unsafe.Pointer(&sig[0])), &sigblen, (*C.uchar)(unsafe.Pointer(&data[0])),
-			C.size_t(len(data))) != 1 {
-			return nil, PopError()
-		}
-
-		return sig[:sigblen], nil
+	sm3Method := C.X_EVP_sm3()
+	if method != nil && method != sm3Method {
+		return nil, fmt.Errorf("SM2 signature must use SM3 digest (GM/T 0009-2012)")
 	}
 
-	// 其他算法的标准签名流程
+	if options == nil {
+		sm2DefaultIDWarnOnce.Do(func() {
+			log.Println("WARNING: SM2 signing with default user ID. " +
+				"The default ID is a well-known test value per GM/T 0009-2012. " +
+				"Production applications MUST use a custom, unique SM2 ID. " +
+				"Pass SignOptions with a custom SM2ID to suppress this warning.")
+		})
+		options = DefaultSM2SignOptions()
+	}
+
+	sm2IDBytes, err := ParseSM2ID(options.SM2ID, options.SM2IDIsHex)
+	if err != nil {
+		return nil, err
+	}
+
+	var pctx *C.EVP_PKEY_CTX
+
+	if C.X_EVP_DigestSignInit(ctx, &pctx, sm3Method, nil, key.key) != 1 {
+		return nil, PopError()
+	}
+
+	sm2IDPtr := C.CBytes(sm2IDBytes)
+	defer C.X_free(sm2IDPtr)
+	defer runtime.KeepAlive(sm2IDBytes)
+
+	if C.X_EVP_PKEY_CTX_set1_id(pctx, sm2IDPtr, C.int(len(sm2IDBytes))) <= 0 {
+		return nil, fmt.Errorf("failed to set SM2 ID: %w", PopError())
+	}
+
+	var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
+	sig := make([]byte, sigblen)
+
+	if C.X_EVP_DigestSign(ctx, (*C.uchar)(unsafe.Pointer(&sig[0])), &sigblen,
+		(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
+		return nil, PopError()
+	}
+
+	runtime.KeepAlive(sig)
+
+	return sig[:sigblen], nil
+}
+
+func (key *pKey) signEd25519(ctx *C.EVP_MD_CTX, data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, ErrNilParameter
+	}
+
+	var sigblen C.size_t = C.size_t(C.X_EVP_PKEY_size(key.key))
+	sig := make([]byte, sigblen)
+
+	if C.X_EVP_DigestSignInit(ctx, nil, nil, nil, key.key) != 1 {
+		return nil, PopError()
+	}
+
+	if C.X_EVP_DigestSign(ctx, (*C.uchar)(unsafe.Pointer(&sig[0])), &sigblen, (*C.uchar)(unsafe.Pointer(&data[0])),
+		C.size_t(len(data))) != 1 {
+		return nil, PopError()
+	}
+
+	return sig[:sigblen], nil
+}
+
+func (key *pKey) signStandard(ctx *C.EVP_MD_CTX, method Method, data []byte) ([]byte, error) {
 	if C.X_EVP_DigestSignInit(ctx, nil, method, nil, key.key) != 1 {
 		return nil, PopError()
 	}
@@ -471,78 +473,83 @@ func (key *pKey) VerifyWithOptions(method Method, data, sig []byte, options *Sig
 	defer runtime.KeepAlive(sig)
 	defer runtime.KeepAlive(key)
 
-	// SM2 验证必须设置与签名相同的用户 ID
-	if key.KeyType() == KeyTypeSM2 {
-		sm3Method := C.X_EVP_sm3()
-		if method != nil && method != sm3Method {
-			return fmt.Errorf("SM2 verification must use SM3 digest (GM/T 0009-2012)")
-		}
-		if len(data) == 0 || len(sig) == 0 {
-			return ErrNilParameter
-		}
+	switch key.KeyType() {
+	case KeyTypeSM2:
+		return key.verifySM2(ctx, method, data, sig, options)
+	case KeyTypeED25519:
+		return key.verifyEd25519(ctx, data, sig)
+	default:
+		return key.verifyStandard(ctx, method, data, sig)
+	}
+}
 
-		if options == nil {
-			sm2DefaultIDWarnOnce.Do(func() {
-				log.Println("WARNING: SM2 verification with default user ID. " +
-					"The default ID is a well-known test value per GM/T 0009-2012. " +
-					"Production applications MUST use a custom, unique SM2 ID. " +
-					"Pass VerifyOptions with a custom SM2ID to suppress this warning.")
-			})
-			options = DefaultSM2SignOptions()
-		}
-
-		if len(options.SM2ID) == 0 {
-			return fmt.Errorf("SM2 ID cannot be empty")
-		}
-
-		// 解析 SM2 用户 ID 字节（统一使用 ParseSM2ID）
-		sm2IDBytes, err := ParseSM2ID(options.SM2ID, options.SM2IDIsHex)
-		if err != nil {
-			return err
-		}
-
-		// 将解码后的 ID 字节传递给 C（而非原始 hex 字符串）
-		// A-01 修复：使用 CBytes 代替 CString，避免 null 字节截断
-		sm2IDPtr := C.CBytes(sm2IDBytes)
-		defer C.X_free(sm2IDPtr)
-		defer runtime.KeepAlive(sm2IDBytes)
-
-		var pctx *C.EVP_PKEY_CTX
-		if C.X_EVP_DigestVerifyInit(ctx, &pctx, sm3Method, nil, key.key) != 1 {
-			return PopError()
-		}
-
-		if C.X_EVP_PKEY_CTX_set1_id(pctx, sm2IDPtr, C.int(len(sm2IDBytes))) <= 0 {
-			return fmt.Errorf("failed to set SM2 ID: %w", PopError())
-		}
-
-		if C.X_EVP_DigestVerify(ctx, ((*C.uchar)(unsafe.Pointer(&sig[0]))), C.size_t(len(sig)),
-			(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
-			return PopError()
-		}
-
-		return nil
+func (key *pKey) verifySM2(ctx *C.EVP_MD_CTX, method Method, data, sig []byte, options *SignOptions) error {
+	sm3Method := C.X_EVP_sm3()
+	if method != nil && method != sm3Method {
+		return fmt.Errorf("SM2 verification must use SM3 digest (GM/T 0009-2012)")
+	}
+	if len(data) == 0 || len(sig) == 0 {
+		return ErrNilParameter
 	}
 
-	// Ed25519 验证
-	if key.KeyType() == KeyTypeED25519 {
-		if method != nil || len(data) == 0 || len(sig) == 0 {
-			return ErrNilParameter
-		}
-
-		if C.X_EVP_DigestVerifyInit(ctx, nil, nil, nil, key.key) != 1 {
-			return PopError()
-		}
-
-		if C.X_EVP_DigestVerify(ctx, ((*C.uchar)(unsafe.Pointer(&sig[0]))), C.size_t(len(sig)),
-			(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
-			return PopError()
-		}
-
-		return nil
+	if options == nil {
+		sm2DefaultIDWarnOnce.Do(func() {
+			log.Println("WARNING: SM2 verification with default user ID. " +
+				"The default ID is a well-known test value per GM/T 0009-2012. " +
+				"Production applications MUST use a custom, unique SM2 ID. " +
+				"Pass VerifyOptions with a custom SM2ID to suppress this warning.")
+		})
+		options = DefaultSM2SignOptions()
 	}
 
-	// 其他算法的标准验证流程
+	if len(options.SM2ID) == 0 {
+		return fmt.Errorf("SM2 ID cannot be empty")
+	}
+
+	sm2IDBytes, err := ParseSM2ID(options.SM2ID, options.SM2IDIsHex)
+	if err != nil {
+		return err
+	}
+
+	sm2IDPtr := C.CBytes(sm2IDBytes)
+	defer C.X_free(sm2IDPtr)
+	defer runtime.KeepAlive(sm2IDBytes)
+
+	var pctx *C.EVP_PKEY_CTX
+	if C.X_EVP_DigestVerifyInit(ctx, &pctx, sm3Method, nil, key.key) != 1 {
+		return PopError()
+	}
+
+	if C.X_EVP_PKEY_CTX_set1_id(pctx, sm2IDPtr, C.int(len(sm2IDBytes))) <= 0 {
+		return fmt.Errorf("failed to set SM2 ID: %w", PopError())
+	}
+
+	if C.X_EVP_DigestVerify(ctx, ((*C.uchar)(unsafe.Pointer(&sig[0]))), C.size_t(len(sig)),
+		(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
+		return PopError()
+	}
+
+	return nil
+}
+
+func (key *pKey) verifyEd25519(ctx *C.EVP_MD_CTX, data, sig []byte) error {
+	if len(data) == 0 || len(sig) == 0 {
+		return ErrNilParameter
+	}
+
+	if C.X_EVP_DigestVerifyInit(ctx, nil, nil, nil, key.key) != 1 {
+		return PopError()
+	}
+
+	if C.X_EVP_DigestVerify(ctx, ((*C.uchar)(unsafe.Pointer(&sig[0]))), C.size_t(len(sig)),
+		(*C.uchar)(unsafe.Pointer(&data[0])), C.size_t(len(data))) != 1 {
+		return PopError()
+	}
+
+	return nil
+}
+
+func (key *pKey) verifyStandard(ctx *C.EVP_MD_CTX, method Method, data, sig []byte) error {
 	if C.X_EVP_DigestVerifyInit(ctx, nil, method, nil, key.key) != 1 {
 		return PopError()
 	}
@@ -1020,6 +1027,37 @@ func GenerateRSAKey(bits int) (PrivateKey, error) {
 	return GenerateRSAKeyWithExponent(bits, defaultPubExp)
 }
 
+// validateRSAKeyParams 验证 RSA 密钥生成参数
+// 符合 NIST SP 800-56B Rev.2 和 FIPS 186-4 标准
+func validateRSAKeyParams(bits, exponent int) error {
+	if bits < rsaMinKeyBits {
+		return fmt.Errorf("RSA key size must be at least %d bits (requested: %d). "+
+			"1024-bit keys are deprecated and insecure per NIST SP 800-57 Part 1 Rev. 5", rsaMinKeyBits, bits)
+	}
+
+	if bits > rsaMaxKeyBits {
+		return fmt.Errorf("RSA key size too large (requested: %d, maximum: %d)", bits, rsaMaxKeyBits)
+	}
+
+	if exponent%2 == 0 {
+		return fmt.Errorf("RSA public exponent must be odd (got: %d)", exponent)
+	}
+
+	if exponent < rsaMinPubExp {
+		return fmt.Errorf("RSA public exponent must be at least %d (got: %d)", rsaMinPubExp, exponent)
+	}
+
+	if exponent != rsaStandardPubExp && exponent < rsaStandardPubExp {
+		log.Printf("WARNING: RSA public exponent %d is non-standard. NIST SP 800-56B Rev.2 recommends %d.", exponent, rsaStandardPubExp)
+	}
+
+	if exponent > rsaMaxPubExp {
+		return fmt.Errorf("RSA public exponent too large (got: %d)", exponent)
+	}
+
+	return nil
+}
+
 // GenerateRSAKeyWithExponent generates a new RSA private key.
 //
 // 安全特性：
@@ -1046,35 +1084,8 @@ func GenerateRSAKey(bits int) (PrivateKey, error) {
 // - NIST SP 800-57 Part 1 Rev.5 (Key Management)
 // - GB/T 3624-2018 (信息安全技术 SM2密码密码算法使用规范)
 func GenerateRSAKeyWithExponent(bits int, exponent int) (PrivateKey, error) {
-	// 密钥长度验证：至少2048位
-	if bits < 2048 {
-		return nil, fmt.Errorf("RSA key size must be at least 2048 bits (requested: %d). "+
-			"1024-bit keys are deprecated and insecure per NIST SP 800-57 Part 1 Rev. 5", bits)
-	}
-
-	// 密钥长度上限检查（防止DoS攻击）
-	if bits > 40960 {
-		return nil, fmt.Errorf("RSA key size too large (requested: %d, maximum: 40960)", bits)
-	}
-
-	// 指数验证：必须是奇数
-	if exponent%2 == 0 {
-		return nil, fmt.Errorf("RSA public exponent must be odd (got: %d)", exponent)
-	}
-
-	// 指数最小值检查
-	if exponent < 3 {
-		return nil, fmt.Errorf("RSA public exponent must be at least 3 (got: %d)", exponent)
-	}
-
-	// NIST SP 800-56B Rev.2: 允许奇数指数，但小于 65537 的非标准值给出警告
-	if exponent != 65537 && exponent < 65537 {
-		log.Printf("WARNING: RSA public exponent %d is non-standard. NIST SP 800-56B Rev.2 recommends 65537.", exponent)
-	}
-
-	// 指数最大值检查
-	if exponent > 1<<31-1 {
-		return nil, fmt.Errorf("RSA public exponent too large (got: %d)", exponent)
+	if err := validateRSAKeyParams(bits, exponent); err != nil {
+		return nil, err
 	}
 
 	// 创建 RSA 密钥生成上下文

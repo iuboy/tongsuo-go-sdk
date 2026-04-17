@@ -33,9 +33,9 @@ import (
 var sslCtxIdx = C.X_SSL_CTX_new_index()
 
 type Ctx struct {
-	ctx   *C.SSL_CTX
-	cert  *crypto.Certificate
-	chain []*crypto.Certificate
+	ctx    *C.SSL_CTX
+	cert   *crypto.Certificate
+	chain  []*crypto.Certificate
 	handle cgo.Handle
 
 	key      crypto.PrivateKey
@@ -80,8 +80,8 @@ func newCtx(method *C.SSL_METHOD) (*Ctx, error) {
 type SSLVersion int
 
 const (
-	SSLv3 SSLVersion = 0x0300 // Deprecated: Vulnerable to "POODLE" attack. Will be rejected at runtime.
-	TLSv1 SSLVersion = 0x0301 // Deprecated: Prohibited by RFC 8996. Will be rejected at runtime.
+	SSLv3   SSLVersion = 0x0300 // Deprecated: Vulnerable to "POODLE" attack. Will be rejected at runtime.
+	TLSv1   SSLVersion = 0x0301 // Deprecated: Prohibited by RFC 8996. Will be rejected at runtime.
 	TLSv1_1 SSLVersion = 0x0302 // Deprecated: Prohibited by RFC 8996. Will be rejected at runtime.
 	TLSv1_2 SSLVersion = 0x0303
 	TLSv1_3 SSLVersion = 0x0304
@@ -199,6 +199,7 @@ func NewTLS13SMCtx() (*Ctx, error) {
 	}
 	return ctx, nil
 }
+
 // NewCtxFromFiles calls NewCtx, loads the provided files, and configures the
 // context to use them.
 func NewCtxFromFiles(certFile string, keyFile string) (*Ctx, error) {

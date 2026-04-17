@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Library linking is provided by the crypto sub-package (-lssl -lcrypto).
+// This file only specifies include paths.
+//
 //go:build !static
 // +build !static
 
 package tongsuogo
 
 // #cgo CFLAGS: -I${SRCDIR}/include
-// #cgo linux CFLAGS: -I/opt/local/tongsuo/include
-// #cgo linux LDFLAGS: -L/opt/local/tongsuo/lib -lssl
-// #cgo darwin CFLAGS: -I/opt/local/tongsuo/include
-// #cgo darwin LDFLAGS: -L/opt/local/tongsuo/lib -lssl
-// #cgo windows CFLAGS: -DWIN32_LEAN_AND_MEAN -I/opt/local/tongsuo/include
-// #cgo windows LDFLAGS: -L/opt/local/tongsuo/lib -lssl
+// #cgo linux CFLAGS: -I${SRCDIR}/include -I/opt/local/tongsuo/include
+// #cgo linux LDFLAGS: -L/opt/local/tongsuo/lib
+// #cgo darwin CFLAGS: -I${SRCDIR}/include -I/opt/local/tongsuo/include
+// #cgo darwin LDFLAGS: -L/opt/local/tongsuo/lib
+// #cgo windows CFLAGS: -DWIN32_LEAN_AND_MEAN -I${SRCDIR}/include -I/opt/local/tongsuo/include
+// #cgo windows LDFLAGS: -L/opt/local/tongsuo/lib
 import "C"

@@ -22,6 +22,18 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"unsafe"
+)
+
+const (
+	gcmMinIVLen          = 12
+	gcmMaxIVLen          = 1024
+	gcmTagLen            = 16
+	gcmDefaultMaxHistory = 10000
+	gcmValidKeySize128   = 16
+	gcmValidKeySize192   = 24
+	gcmValidKeySize256   = 32
+	gcmMinPayloadSize    = gcmMinIVLen + gcmTagLen // 28: IV(12) + Tag(16), 空 plaintext 也是合法的
 )
 
 // GCMSecurityContext GCM模式安全上下文
@@ -78,10 +90,10 @@ const gcmMaxContexts = 1024
 // 推荐配置：
 // - contextID应该唯一标识使用场景（如会话ID、连接ID等）
 // - maxHistory建议值：
-//   * 低安全性应用：1000（约1MB内存）
-//   * 标准安全性应用：10000（约10MB内存）
-//   * 高安全性应用：100000（约100MB内存）
-//   * 极高安全性应用：0（无限制，需监控内存）
+//   - 低安全性应用：1000（约1MB内存）
+//   - 标准安全性应用：10000（约10MB内存）
+//   - 高安全性应用：100000（约100MB内存）
+//   - 极高安全性应用：0（无限制，需监控内存）
 //
 // 内存使用估算：
 // - 每个IV条目约100字节（16字节IV的hex编码 + map开销）
@@ -91,7 +103,7 @@ func NewGCMSecurityContext(contextID string, maxHistory int) *GCMSecurityContext
 		maxHistory = 0
 	}
 	if maxHistory == 0 {
-		maxHistory = 10000
+		maxHistory = gcmDefaultMaxHistory
 	}
 
 	return &GCMSecurityContext{
@@ -125,7 +137,7 @@ func GetGCMSecurityContext(contextID string) *GCMSecurityContext {
 				contextID:  "",
 			}
 		}
-		ctx = NewGCMSecurityContext(contextID, 10000) // 默认保留10000个IV
+		ctx = NewGCMSecurityContext(contextID, gcmDefaultMaxHistory) // 默认保留10000个IV
 		gcmSecurityManager.contexts[contextID] = ctx
 	}
 	return ctx
@@ -148,12 +160,12 @@ func GetGCMSecurityContext(contextID string) *GCMSecurityContext {
 // 这符合 NIST SP 800-38D Section 8 对 IV 唯一性的严格要求。
 func (ctx *GCMSecurityContext) checkAndRecordIV(iv []byte) error {
 	// IV长度验证
-	if len(iv) < 12 {
-		return fmt.Errorf("GCM IV too short: %d bytes (minimum 12 per NIST SP 800-38D)", len(iv))
+	if len(iv) < gcmMinIVLen {
+		return fmt.Errorf("GCM IV too short: %d bytes (minimum %d per NIST SP 800-38D)", len(iv), gcmMinIVLen)
 	}
 
 	// 直接使用 IV 字节作为 map key，避免 hex 编码的性能和内存开销
-	ivKey := string(iv)
+	ivKey := unsafeString(iv)
 
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
@@ -231,12 +243,12 @@ func (ctx *GCMSecurityContext) GetIVHistorySize() int {
 // - RFC 5116 (AEAD)
 func GCMEncrypt(key, plaintext, iv, aad []byte, securityCtx *GCMSecurityContext) ([]byte, []byte, error) {
 	// 参数验证
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, nil, fmt.Errorf("invalid GCM key size: %d bytes (expected 16/24/32)", len(key))
+	if len(key) != gcmValidKeySize128 && len(key) != gcmValidKeySize192 && len(key) != gcmValidKeySize256 {
+		return nil, nil, fmt.Errorf("invalid GCM key size: %d bytes (expected %d/%d/%d)", len(key), gcmValidKeySize128, gcmValidKeySize192, gcmValidKeySize256)
 	}
-	if len(iv) < 12 {
-		// NIST SP 800-38D 推荐最小12字节
-		return nil, nil, fmt.Errorf("IV too short (got %d bytes, minimum 12 recommended)", len(iv))
+
+	if len(iv) < gcmMinIVLen {
+		return nil, nil, fmt.Errorf("IV too short (got %d bytes, minimum %d recommended)", len(iv), gcmMinIVLen)
 	}
 
 	// 使用默认或提供的上下文
@@ -309,15 +321,14 @@ func GCMEncrypt(key, plaintext, iv, aad []byte, securityCtx *GCMSecurityContext)
 // - 完整性验证
 func GCMDecrypt(key, ciphertext, tag, iv, aad []byte, securityCtx *GCMSecurityContext) ([]byte, error) {
 	// 参数验证
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, fmt.Errorf("invalid GCM key size: %d bytes (expected 16/24/32)", len(key))
+	if len(key) != gcmValidKeySize128 && len(key) != gcmValidKeySize192 && len(key) != gcmValidKeySize256 {
+		return nil, fmt.Errorf("invalid GCM key size: %d bytes (expected %d/%d/%d)", len(key), gcmValidKeySize128, gcmValidKeySize192, gcmValidKeySize256)
 	}
-	if len(iv) < 12 {
-		return nil, fmt.Errorf("IV too short (got %d bytes, minimum 12 recommended)", len(iv))
+	if len(iv) < gcmMinIVLen {
+		return nil, fmt.Errorf("IV too short (got %d bytes, minimum %d recommended)", len(iv), gcmMinIVLen)
 	}
-	if len(tag) != 16 {
-		// GCM标签必须是16字节
-		return nil, fmt.Errorf("invalid GCM tag size: %d bytes (expected 16)", len(tag))
+	if len(tag) != gcmTagLen {
+		return nil, fmt.Errorf("invalid GCM tag size: %d bytes (expected %d)", len(tag), gcmTagLen)
 	}
 
 	// 注意：解密不记录 IV。
@@ -386,11 +397,11 @@ func GCMDecrypt(key, ciphertext, tag, iv, aad []byte, securityCtx *GCMSecurityCo
 // - 12字节：NIST推荐，提供良好的安全性/性能平衡
 // - 16字节：提供更高的碰撞抵抗
 func GenerateGCMRandomIV(ivLen int) ([]byte, error) {
-	if ivLen < 12 {
-		return nil, fmt.Errorf("IV length too short (got %d, minimum 12)", ivLen)
+	if ivLen < gcmMinIVLen {
+		return nil, fmt.Errorf("IV length too short (got %d, minimum %d)", ivLen, gcmMinIVLen)
 	}
-	if ivLen > 1024 {
-		return nil, fmt.Errorf("IV length too large (got %d, maximum 1024)", ivLen)
+	if ivLen > gcmMaxIVLen {
+		return nil, fmt.Errorf("IV length too large (got %d, maximum %d)", ivLen, gcmMaxIVLen)
 	}
 
 	iv := make([]byte, ivLen)
@@ -428,11 +439,10 @@ func GenerateGCMRandomIV(ivLen int) ([]byte, error) {
 // - 考虑使用64位或96位计数器
 func GenerateGCMCounterIV(baseIV []byte, counter uint64) ([]byte, error) {
 	ivLen := len(baseIV)
-	if ivLen < 12 {
-		return nil, fmt.Errorf("base IV too short (got %d, minimum 12)", ivLen)
+	if ivLen < gcmMinIVLen {
+		return nil, fmt.Errorf("base IV too short (got %d, minimum %d)", ivLen, gcmMinIVLen)
 	}
 
-	// 创建IV副本
 	iv := make([]byte, ivLen)
 	copy(iv, baseIV)
 
@@ -478,7 +488,7 @@ func GenerateGCMCounterIV(baseIV []byte, counter uint64) ([]byte, error) {
 //	error - 错误
 func EncryptWithAutoGCMIV(key, plaintext, aad []byte, securityCtx *GCMSecurityContext) ([]byte, error) {
 	// 生成12字节随机IV（NIST推荐长度）
-	iv, err := GenerateGCMRandomIV(12)
+	iv, err := GenerateGCMRandomIV(gcmMinIVLen)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate IV: %w", err)
 	}
@@ -521,18 +531,14 @@ func EncryptWithAutoGCMIV(key, plaintext, aad []byte, securityCtx *GCMSecurityCo
 //	明文
 //	error - 错误
 func DecryptWithAutoGCMIV(key, data, aad []byte, securityCtx *GCMSecurityContext) ([]byte, error) {
-	// 验证最小长度
-	// IV (12) + 最小密文 (1) + 标签 (16) = 29字节
-	if len(data) < 29 {
-		return nil, fmt.Errorf("data too short (got %d bytes, minimum 29)", len(data))
+	if len(data) < gcmMinPayloadSize {
+		return nil, fmt.Errorf("data too short (got %d bytes, minimum %d)", len(data), gcmMinPayloadSize)
 	}
 
-	// 提取IV
-	iv := data[:12]
+	iv := data[:gcmMinIVLen]
 
-	// 提取密文和标签
-	ciphertext := data[12 : len(data)-16]
-	tag := data[len(data)-16:]
+	ciphertext := data[gcmMinIVLen : len(data)-gcmTagLen]
+	tag := data[len(data)-gcmTagLen:]
 
 	// 使用安全上下文（如果未提供）
 	if securityCtx == nil {
@@ -655,8 +661,8 @@ func NewSecureGCMDecryptionCipherCtx(blocksize int, key, iv []byte, securityCtx 
 
 	if len(iv) > 0 {
 		// 仅验证 IV 长度，不记录到历史
-		if len(iv) < 12 {
-			return nil, fmt.Errorf("GCM IV too short for decryption: %d bytes (minimum 12 per NIST SP 800-38D)", len(iv))
+		if len(iv) < gcmMinIVLen {
+			return nil, fmt.Errorf("GCM IV too short for decryption: %d bytes (minimum %d per NIST SP 800-38D)", len(iv), gcmMinIVLen)
 		}
 
 		// 设置IV
@@ -752,4 +758,8 @@ func (e *structuredError) Error() string {
 
 func (e *structuredError) Code() string {
 	return e.code
+}
+
+func unsafeString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
 }
