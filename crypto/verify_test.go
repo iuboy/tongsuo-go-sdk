@@ -436,7 +436,7 @@ func TestVerify_LoadCertsFromPEM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-		combined := make([]byte, 0, len(pem1)+len(pem2))
+	combined := make([]byte, 0, len(pem1)+len(pem2))
 	combined = append(combined, pem1...)
 	combined = append(combined, pem2...)
 
